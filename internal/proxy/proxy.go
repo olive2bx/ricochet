@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
+
+	"github.com/olive2bx/ricochet/internal/collector"
 )
 
 // Config configures a Proxy.
@@ -29,6 +31,18 @@ type Config struct {
 	Bypass []string
 	// Logger receives routing logs. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// Collector receives one event per request or tunnel. May be nil.
+	Collector *collector.Collector
+	// MaskHeaders lists headers whose values are hidden in events. Nil
+	// means DefaultMaskedHeaders; an empty non-nil slice masks nothing.
+	MaskHeaders []string
+	// CaptureBodies is the max number of body bytes stored per request and
+	// per response (plain HTTP and MITM only). 0 disables capture.
+	CaptureBodies int
+	// NoKeepAlive disables connection reuse towards servers so that every
+	// request has its own DNS/connect/TLS timings.
+	NoKeepAlive bool
 }
 
 // Proxy is an HTTP proxy handler.
@@ -39,6 +53,10 @@ type Proxy struct {
 	dialer net.Dialer
 	tr     *http.Transport
 	gp     *goproxy.ProxyHttpServer
+
+	col          *collector.Collector
+	mask         []string
+	captureLimit int
 }
 
 // New builds a Proxy.
@@ -64,12 +82,25 @@ func New(cfg Config) (*Proxy, error) {
 		auth:   cfg.UpstreamAuth,
 		log:    logger,
 		dialer: net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second},
+
+		col:          cfg.Collector,
+		captureLimit: max(0, cfg.CaptureBodies),
+	}
+	mask := cfg.MaskHeaders
+	if mask == nil {
+		mask = DefaultMaskedHeaders
+	}
+	for _, h := range mask {
+		if h = strings.TrimSpace(h); h != "" {
+			p.mask = append(p.mask, http.CanonicalHeaderKey(h))
+		}
 	}
 
 	p.tr = &http.Transport{
 		Proxy:                 p.transportProxy,
 		DialContext:           p.dialOverride,
 		ForceAttemptHTTP2:     false,
+		DisableKeepAlives:     cfg.NoKeepAlive,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -79,12 +110,16 @@ func New(cfg Config) (*Proxy, error) {
 	gp := goproxy.NewProxyHttpServer()
 	gp.Logger = slogPrintf{logger}
 	gp.Tr = p.tr
+	// Forward the client's Accept-Encoding untouched: byte counts then match
+	// the wire and the client gets the encoding it asked for.
+	gp.KeepAcceptEncoding = true
 	gp.ConnectDial = nil
 	gp.ConnectDialWithReq = p.connectDial
 	gp.NonproxyHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "ricochet is an HTTP proxy: use it with curl -x / HTTPS_PROXY", http.StatusBadRequest)
 	})
 	p.gp = gp
+	p.installRoundTripper()
 	return p, nil
 }
 
@@ -131,29 +166,49 @@ func (p *Proxy) dialOverride(ctx context.Context, network, addr string) (net.Con
 	return conn, nil
 }
 
-// connectDial opens the tunnel for a CONNECT request.
+// connectDial opens the tunnel for a CONNECT request and records it.
 func (p *Proxy) connectDial(req *http.Request, network, addr string) (net.Conn, error) {
 	ctx := req.Context()
+	start := time.Now()
 	route, err := p.router.Route(addr)
 	if err != nil {
 		return nil, err
 	}
+	host, port := splitPort(addr)
+	ev := p.record(collector.Event{
+		StartedAt:  start,
+		ClientAddr: req.RemoteAddr,
+		Scheme:     collector.SchemeHTTPSTunnel,
+		Host:       host,
+		Port:       port,
+		Route:      route.String(),
+		RuleMatch:  ruleText(route),
+	})
 	p.log.Debug("route", "scheme", "connect", "host", addr, "route", route.String(), "rule", ruleText(route))
 
-	conn, err := p.dialer.DialContext(ctx, network, route.Addr)
-	if err != nil {
-		p.log.Warn("dial failed", "host", addr, "route", route.String(), "err", err)
-		return nil, fmt.Errorf("dial %s (%s): %w", addr, route, err)
-	}
-	if route.Kind != RouteUpstream {
-		return conn, nil
-	}
-	tunnel, err := connectThrough(ctx, conn, addr, p.auth)
-	if err != nil {
-		p.log.Warn("upstream CONNECT failed", "host", addr, "route", route.String(), "err", err)
+	fail := func(err error) (net.Conn, error) {
+		ev.Err = err.Error()
+		ev.Total = time.Since(start)
+		ev.Done = true
+		p.update(ev)
+		p.log.Warn("tunnel failed", "host", addr, "route", route.String(), "err", err)
 		return nil, err
 	}
-	return tunnel, nil
+
+	conn, err := p.traceDial(ctx, network, route.Addr, &ev)
+	if err != nil {
+		return fail(fmt.Errorf("dial %s (%s): %w", addr, route, err))
+	}
+	if route.Kind == RouteUpstream {
+		hs := time.Now()
+		conn, err = connectThrough(ctx, conn, addr, p.auth)
+		ev.Blocked = time.Since(hs)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	p.update(ev)
+	return newTunnelConn(p, conn, start, ev), nil
 }
 
 func ruleText(r Route) string {

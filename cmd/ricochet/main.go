@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/olive2bx/ricochet/internal/collector"
+	"github.com/olive2bx/ricochet/internal/dashboard"
 	"github.com/olive2bx/ricochet/internal/proxy"
 	"github.com/olive2bx/ricochet/internal/rules"
 )
@@ -28,6 +30,9 @@ type options struct {
 	upstream     string
 	upstreamAuth string
 	bypass       string
+	dashboard    string
+	history      int
+	noKeepAlive  bool
 	verbose      bool
 }
 
@@ -38,6 +43,9 @@ func main() {
 	flag.StringVar(&o.upstream, "upstream", "", "upstream HTTP proxy, e.g. http://host:3128 (default: direct)")
 	flag.StringVar(&o.upstreamAuth, "upstream-auth", "", "upstream credentials user:pass (or env RICOCHET_UPSTREAM_AUTH)")
 	flag.StringVar(&o.bypass, "bypass", "", "comma-separated hosts that skip the upstream, e.g. a.com,*.b.com")
+	flag.StringVar(&o.dashboard, "dashboard", "127.0.0.1:8081", `dashboard listen address ("" to disable)`)
+	flag.IntVar(&o.history, "history", 5000, "number of requests kept in memory")
+	flag.BoolVar(&o.noKeepAlive, "no-keepalive", false, "disable connection reuse towards servers (per-request DNS/connect/TLS timings)")
 	flag.BoolVar(&o.verbose, "verbose", false, "verbose logs")
 	flag.Parse()
 
@@ -72,12 +80,16 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		return err
 	}
 
+	col := collector.New(o.history)
+
 	p, err := proxy.New(proxy.Config{
 		Rules:        store,
 		Upstream:     upstream,
 		UpstreamAuth: auth,
 		Bypass:       splitList(o.bypass),
 		Logger:       logger,
+		Collector:    col,
+		NoKeepAlive:  o.noKeepAlive,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
@@ -112,8 +124,43 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
 	}
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- srv.Serve(ln) }()
+
+	var dash *http.Server
+	if o.dashboard != "" {
+		dln, err := net.Listen("tcp", o.dashboard)
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("dashboard listen: %w", err)
+		}
+		var allowed []string
+		if !isLoopback(dln.Addr()) {
+			logger.Warn("dashboard is listening on a non-loopback address: captured traffic may be exposed", "addr", dln.Addr().String())
+			if h, _, err := net.SplitHostPort(o.dashboard); err == nil && h != "" {
+				allowed = append(allowed, h)
+			}
+			if hn, err := os.Hostname(); err == nil {
+				allowed = append(allowed, hn)
+			}
+		}
+		info := map[string]string{"proxy": ln.Addr().String(), "amont": upstreamDesc}
+		dash = &http.Server{
+			Handler: dashboard.New(dashboard.Options{
+				Collector:    col,
+				Rules:        store.Status,
+				Info:         info,
+				Logger:       logger,
+				AllowedHosts: allowed,
+			}),
+			ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
+			// Cancelled on shutdown so that SSE streams end.
+			BaseContext: func(net.Listener) context.Context { return ctx },
+		}
+		go func() { errc <- dash.Serve(dln) }()
+		logger.Info("dashboard: http://" + dln.Addr().String() + "/")
+	}
 
 	select {
 	case err := <-errc:
@@ -124,6 +171,11 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if dash != nil {
+		if err := dash.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			logger.Warn("dashboard shutdown", "err", err)
+		}
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("shutdown: %w", err)
 	}

@@ -10,9 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/olive2bx/ricochet/internal/collector"
 )
 
 // seen records what a test backend received.
@@ -274,5 +278,121 @@ func TestNewRejectsBadUpstream(t *testing.T) {
 		if _, err := New(Config{Upstream: u}); err == nil {
 			t.Errorf("New(%q) succeeded", raw)
 		}
+	}
+}
+
+// waitDone polls col until n events are done.
+func waitDone(t *testing.T, col *collector.Collector, n int) []collector.Event {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		evs := col.All()
+		done := 0
+		for _, e := range evs {
+			if e.Done {
+				done++
+			}
+		}
+		if done >= n {
+			return evs
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for %d done events, got %+v", n, evs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestEventsHTTP(t *testing.T) {
+	srv, _ := backend(t, "backend", false)
+	col := collector.New(10)
+	proxyURL := startProxy(t, Config{
+		Rules:     mustRules(t, "127.0.0.1 api.example.com\n"),
+		Collector: col,
+	})
+	c := client(t, proxyURL, nil)
+
+	p := port(t, srv)
+	req, _ := http.NewRequest(http.MethodPost, "http://api.example.com:"+p+"/submit?q=1", strings.NewReader("hello=world"))
+	req.Header.Set("Authorization", "Bearer s3cret")
+	req.Header.Set("X-Trace", "abc")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	e := waitDone(t, col, 1)[0]
+	if e.Scheme != collector.SchemeHTTP || e.Method != "POST" || e.Path != "/submit?q=1" || e.Status != 200 ||
+		e.Host != "api.example.com" || p != strconv.Itoa(int(e.Port)) {
+		t.Errorf("event = %+v", e)
+	}
+	if e.Route != "override:127.0.0.1" || !strings.Contains(e.RuleMatch, "api.example.com") {
+		t.Errorf("route = %q, rule = %q", e.Route, e.RuleMatch)
+	}
+	if e.BytesUp != int64(len("hello=world")) || e.BytesDown != int64(len("backend")) {
+		t.Errorf("bytes up/down = %d/%d", e.BytesUp, e.BytesDown)
+	}
+	if e.Total <= 0 || e.TTFB <= 0 || e.Connect <= 0 || e.TTFB > e.Total {
+		t.Errorf("timings total=%v ttfb=%v connect=%v", e.Total, e.TTFB, e.Connect)
+	}
+	if e.DNS != 0 {
+		t.Errorf("DNS = %v for an IP override", e.DNS)
+	}
+	if got := e.ReqHeader.Get("Authorization"); got != "[masked]" {
+		t.Errorf("Authorization = %q, want masked", got)
+	}
+	if got := e.ReqHeader.Get("X-Trace"); got != "abc" {
+		t.Errorf("X-Trace = %q", got)
+	}
+	if e.RespHeader.Get("Content-Type") == "" {
+		t.Errorf("response headers missing: %v", e.RespHeader)
+	}
+	if e.ReqBody != nil || e.RespBody != nil {
+		t.Error("bodies captured without CaptureBodies")
+	}
+}
+
+func TestEventsTunnel(t *testing.T) {
+	srv, _ := backend(t, "tls-backend", true)
+	col := collector.New(10)
+	proxyURL := startProxy(t, Config{Rules: mustRules(t, "127.0.0.1 example.com\n"), Collector: col})
+	c := client(t, proxyURL, srv)
+
+	p := port(t, srv)
+	get(t, c, "https://example.com:"+p+"/")
+	c.CloseIdleConnections()
+
+	e := waitDone(t, col, 1)[0]
+	if e.Scheme != collector.SchemeHTTPSTunnel || e.Host != "example.com" || e.Method != "" || e.Status != 0 {
+		t.Errorf("event = %+v", e)
+	}
+	if e.Route != "override:127.0.0.1" {
+		t.Errorf("route = %q", e.Route)
+	}
+	if e.BytesUp < 100 || e.BytesDown < 100 {
+		t.Errorf("bytes up/down = %d/%d", e.BytesUp, e.BytesDown)
+	}
+	if e.Connect <= 0 || e.TTFB <= 0 || e.Total < e.TTFB {
+		t.Errorf("timings connect=%v ttfb=%v total=%v", e.Connect, e.TTFB, e.Total)
+	}
+	if e.Err != "" {
+		t.Errorf("err = %q", e.Err)
+	}
+}
+
+func TestEventsTunnelError(t *testing.T) {
+	up, _ := fakeUpstream(t, "127.0.0.1:1", true)
+	upURL, _ := url.Parse(up.URL)
+	col := collector.New(10)
+	proxyURL := startProxy(t, Config{Upstream: upURL, Collector: col})
+	c := client(t, proxyURL, nil)
+	if resp, err := c.Get("https://denied.test/"); err == nil {
+		resp.Body.Close()
+	}
+	e := waitDone(t, col, 1)[0]
+	if !strings.Contains(e.Err, "407") || !strings.HasPrefix(e.Route, "upstream:") {
+		t.Errorf("event = %+v", e)
 	}
 }
