@@ -1,0 +1,8 @@
+# Exemple de fichier de règles ricochet (format inspiré de /etc/hosts)
+# <ip>[:port]        <host> [<host>...]
+
+10.1.2.3             api.exemple.com
+10.1.2.4             *.interne.exemple.com     # tout sous-domaine, pas le domaine nu
+10.1.2.5:8443        svc.exemple.com           # override du port de destination
+2001:db8::1          v6.exemple.com
+[2001:db8::2]:9443   v6port.exemple.com
