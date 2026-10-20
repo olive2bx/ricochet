@@ -97,6 +97,9 @@ func TestSubscribeAndClear(t *testing.T) {
 	if m.Event.ReqBody != nil {
 		t.Error("live update carries bodies")
 	}
+	if !m.Event.HasBodies() {
+		t.Error("summary lost the has-bodies flag")
+	}
 	if err := c.Clear(); err != nil {
 		t.Fatal(err)
 	}

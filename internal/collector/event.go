@@ -53,16 +53,20 @@ type Event struct {
 	// Bodies are only captured with --capture-bodies, up to a size limit.
 	ReqBody, RespBody           []byte
 	ReqTruncated, RespTruncated bool
+
+	hadBodies bool // set by Summary when it dropped captured bodies
 }
 
 // Summary returns a copy of e without bodies, for lists and live updates.
 func (e Event) Summary() Event {
+	e.hadBodies = e.HasBodies()
 	e.ReqBody, e.RespBody = nil, nil
 	return e
 }
 
-// HasBodies reports whether a request or response body was captured.
-func (e Event) HasBodies() bool { return len(e.ReqBody) > 0 || len(e.RespBody) > 0 }
+// HasBodies reports whether a request or response body was captured, even
+// if this copy is a summary without them.
+func (e Event) HasBodies() bool { return e.hadBodies || len(e.ReqBody) > 0 || len(e.RespBody) > 0 }
 
 // jsonEvent is the wire format: durations in milliseconds.
 type jsonEvent struct {

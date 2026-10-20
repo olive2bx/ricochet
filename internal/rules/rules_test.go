@@ -1,11 +1,13 @@
 package rules
 
 import (
+	"context"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const sample = `
@@ -222,4 +224,87 @@ func TestNewStore(t *testing.T) {
 	if _, err := NewStore(bad); err == nil {
 		t.Error("NewStore on invalid file succeeded")
 	}
+}
+
+func waitFor(t *testing.T, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func resolvesTo(st *Store, host, ip string) func() bool {
+	return func() bool {
+		got, _, ok := st.Resolve(host)
+		return ok && got.String() == ip
+	}
+}
+
+func TestWatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.txt")
+	if err := os.WriteFile(path, []byte("10.0.0.1 a.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reloads := make(chan error, 10)
+	go st.Watch(ctx, nil, func(err error) { reloads <- err })
+	time.Sleep(100 * time.Millisecond) // let the watcher start
+
+	// In-place write.
+	if err := os.WriteFile(path, []byte("10.0.0.2 a.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 2*time.Second, resolvesTo(st, "a.com", "10.0.0.2"))
+
+	// Invalid content keeps the current rules and reports the error.
+	if err := os.WriteFile(path, []byte("10.0.0.3 a.com\nbroken line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 2*time.Second, func() bool { return st.Status().LastErr != nil })
+	if !resolvesTo(st, "a.com", "10.0.0.2")() {
+		t.Error("rules changed after an invalid edit")
+	}
+
+	// Atomic save: write a temp file then rename it over the original.
+	tmp := filepath.Join(dir, ".rules.txt.tmp")
+	if err := os.WriteFile(tmp, []byte("10.0.0.4 a.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 2*time.Second, resolvesTo(st, "a.com", "10.0.0.4"))
+	if st.Status().LastErr != nil {
+		t.Errorf("LastErr = %v after a valid reload", st.Status().LastErr)
+	}
+}
+
+func TestPoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.txt")
+	if err := os.WriteFile(path, []byte("10.0.0.1 a.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go st.poll(ctx, 20*time.Millisecond, func() { st.Reload() })
+	time.Sleep(50 * time.Millisecond)
+	// Different size so that coarse mtime resolution does not matter.
+	if err := os.WriteFile(path, []byte("10.0.0.22 a.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 2*time.Second, resolvesTo(st, "a.com", "10.0.0.22"))
 }

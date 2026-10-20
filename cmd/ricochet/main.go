@@ -21,6 +21,7 @@ import (
 
 	"github.com/olive2bx/ricochet/internal/collector"
 	"github.com/olive2bx/ricochet/internal/dashboard"
+	"github.com/olive2bx/ricochet/internal/history"
 	"github.com/olive2bx/ricochet/internal/proxy"
 	"github.com/olive2bx/ricochet/internal/rules"
 )
@@ -38,8 +39,14 @@ type options struct {
 	mitmHosts    string
 	caDir        string
 	maskHeaders  string
+	captureBody  int
+	dbPath       string
+	dbMaxRows    int
 	verbose      bool
 }
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	var o options
@@ -55,8 +62,21 @@ func main() {
 	flag.StringVar(&o.mitmHosts, "mitm-hosts", "", "comma-separated hosts to decrypt, e.g. *.example.com,api.foo.com")
 	flag.StringVar(&o.caDir, "ca-dir", "./.ricochet-ca", "directory of the local MITM CA (created on first use)")
 	flag.StringVar(&o.maskHeaders, "mask-headers", strings.Join(proxy.DefaultMaskedHeaders, ","), `headers whose values are hidden in the dashboard ("" to show everything)`)
+	flag.IntVar(&o.captureBody, "capture-bodies", 0, "store up to N bytes of each request/response body (plain HTTP and MITM; 0 = off)")
+	flag.StringVar(&o.dbPath, "db", "", "SQLite file for a persistent history (binary built with -tags sqlite)")
+	flag.IntVar(&o.dbMaxRows, "db-max-rows", history.DefaultMaxRows, "max events kept in the SQLite history")
 	flag.BoolVar(&o.verbose, "verbose", false, "verbose logs")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ricochet", version)
+		return
+	}
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected arguments: %v\n", flag.Args())
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	if o.upstreamAuth == "" {
 		o.upstreamAuth = os.Getenv("RICOCHET_UPSTREAM_AUTH")
@@ -90,6 +110,20 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 	}
 
 	col := collector.New(o.history)
+	if o.dbPath != "" {
+		db, err := history.Open(o.dbPath, o.dbMaxRows, logger)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		past, err := db.Load(o.history)
+		if err != nil {
+			return err
+		}
+		col.Load(past)
+		col.SetSink(db)
+		logger.Info("persistent history", "db", o.dbPath, "loaded", len(past))
+	}
 
 	var ca *tls.Certificate
 	mitmHosts := splitList(o.mitmHosts)
@@ -110,17 +144,18 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 	}
 
 	p, err := proxy.New(proxy.Config{
-		Rules:        store,
-		Upstream:     upstream,
-		UpstreamAuth: auth,
-		Bypass:       splitList(o.bypass),
-		Logger:       logger,
-		Collector:    col,
-		NoKeepAlive:  o.noKeepAlive,
-		MaskHeaders:  mask,
-		CA:           ca,
-		MITM:         o.mitm,
-		MITMHosts:    mitmHosts,
+		Rules:         store,
+		Upstream:      upstream,
+		UpstreamAuth:  auth,
+		Bypass:        splitList(o.bypass),
+		Logger:        logger,
+		Collector:     col,
+		NoKeepAlive:   o.noKeepAlive,
+		MaskHeaders:   mask,
+		CA:            ca,
+		MITM:          o.mitm,
+		MITMHosts:     mitmHosts,
+		CaptureBodies: o.captureBody,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
@@ -138,7 +173,18 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 	if upstream != nil {
 		upstreamDesc = upstream.Host
 	}
+	go store.Watch(ctx, logger, func(err error) {
+		if err != nil {
+			logger.Error("rules reload failed, keeping the previous rules", "err", err)
+			return
+		}
+		// Pooled connections may point to the old addresses.
+		p.CloseIdleConnections()
+		logger.Info("rules reloaded", "rule_count", len(store.Status().Rules))
+	})
+
 	logger.Info("ricochet started",
+		"version", version,
 		"listen", ln.Addr().String(),
 		"rules", store.Path(),
 		"rule_count", len(store.Status().Rules),
@@ -184,6 +230,9 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 			}
 		}
 		info := map[string]string{"proxy": ln.Addr().String(), "amont": upstreamDesc}
+		if o.captureBody > 0 {
+			info["corps"] = fmt.Sprintf("≤ %d o", o.captureBody)
+		}
 		switch {
 		case o.mitm:
 			info["mitm"] = "tous les hosts"
@@ -197,6 +246,7 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 				Info:         info,
 				Logger:       logger,
 				AllowedHosts: allowed,
+				Version:      version,
 			}),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),

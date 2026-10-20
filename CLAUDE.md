@@ -161,14 +161,14 @@ type Event struct {
 
 ## Critères d'acceptation
 
-- [ ] `go build ./...` et `go vet ./...` passent ; `go test ./...` couvre au minimum `rules` (exact, wildcard, priorité, casse, port override, fichier invalide) et le routeur.
-- [ ] `curl -x http://localhost:8080 http://api.exemple.com/` avec une règle → la connexion part vers l'IP forcée, le header `Host` reste `api.exemple.com` (vérifiable avec un serveur de test local).
-- [ ] Même chose en HTTPS (tunnel) : le SNI reste `api.exemple.com`, le certificat est celui du vrai host.
-- [ ] Un host sans règle passe par l'amont (vérifiable avec un faux proxy amont de test qui logge les `CONNECT` et requêtes reçus).
-- [ ] Modifier `rules.txt` à chaud est pris en compte en moins de 2 s sans couper les connexions actives ; un fichier invalide ne casse pas les règles courantes.
-- [ ] Le dashboard affiche les requêtes en temps réel, triables par durée, avec le détail des phases pour HTTP clair et MITM.
-- [ ] Mode MITM : aucune modification du store de certificats système ; la CA est utilisable via `SSL_CERT_FILE` / `--cacert`.
-- [ ] Le binaire démarre sans aucun accès réseau externe (dashboard 100 % embarqué).
+- [x] `go build ./...` et `go vet ./...` passent ; `go test ./...` couvre au minimum `rules` (exact, wildcard, priorité, casse, port override, fichier invalide) et le routeur.
+- [x] `curl -x http://localhost:8080 http://api.exemple.com/` avec une règle → la connexion part vers l'IP forcée, le header `Host` reste `api.exemple.com` (vérifiable avec un serveur de test local).
+- [x] Même chose en HTTPS (tunnel) : le SNI reste `api.exemple.com`, le certificat est celui du vrai host.
+- [x] Un host sans règle passe par l'amont (vérifiable avec un faux proxy amont de test qui logge les `CONNECT` et requêtes reçus).
+- [x] Modifier `rules.txt` à chaud est pris en compte en moins de 2 s sans couper les connexions actives ; un fichier invalide ne casse pas les règles courantes.
+- [x] Le dashboard affiche les requêtes en temps réel, triables par durée, avec le détail des phases pour HTTP clair et MITM.
+- [x] Mode MITM : aucune modification du store de certificats système ; la CA est utilisable via `SSL_CERT_FILE` / `--cacert`.
+- [x] Le binaire démarre sans aucun accès réseau externe (dashboard 100 % embarqué).
 
 ## Points d'attention
 
@@ -178,6 +178,12 @@ type Event struct {
 - Les credentials amont ne doivent **jamais** apparaître dans les logs ni dans le dashboard.
 - Dashboard et proxy écoutent sur loopback par défaut : l'outil expose du trafic potentiellement sensible.
 - Si `go mod download` échoue à cause d'Artifactory : vérifier `GOPROXY`, `GONOSUMDB` / `GONOSUMCHECK` / `GOFLAGS=-mod=mod`, et ne pas modifier ces réglages dans le repo (config locale à l'environnement).
+
+## État
+
+Phases 1 à 4 implémentées. SQLite est derrière le build tag `sqlite`
+(`go build -tags sqlite`) pour garder le binaire par défaut léger ; tester
+avec `go test ./...` et `go test -tags sqlite ./...`.
 
 ## Conventions
 

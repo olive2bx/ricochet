@@ -249,3 +249,65 @@ func TestSSE(t *testing.T) {
 		t.Errorf("SSE events = %v", got)
 	}
 }
+
+func TestExport(t *testing.T) {
+	srv, col := newTestServer(t)
+	e := col.Start(collector.Event{
+		Scheme: collector.SchemeHTTPSMITM, Host: "api.example.com", Port: 443, Method: "POST", Path: "/v1/x?a=1",
+		Route: "override:10.0.0.1", ReqHeader: http.Header{"Content-Type": {"application/json"}},
+		RespHeader: http.Header{"Content-Type": {"text/plain"}}, ReqBody: []byte(`{"k":1}`), RespBody: []byte{0xff, 0xfe},
+	})
+	e.Status, e.Done = 201, true
+	e.DNS, e.Connect, e.TLS, e.TTFB, e.Total = time.Millisecond, 2*time.Millisecond, 3*time.Millisecond, 4*time.Millisecond, 15*time.Millisecond
+	col.Update(e)
+	tun := col.Start(collector.Event{Scheme: collector.SchemeHTTPSTunnel, Host: "t.example.com", Port: 8443, Route: "direct"})
+	tun.Done = true
+	col.Update(tun)
+
+	var har struct {
+		Log struct {
+			Version string
+			Entries []struct {
+				Time    float64
+				Request struct {
+					Method, URL string
+					QueryString []struct{ Name, Value string }
+					PostData    struct{ Text string }
+				}
+				Response struct {
+					Status  int
+					Content struct{ Text, Encoding string }
+				}
+				Timings map[string]float64
+				Route   string `json:"_route"`
+			}
+		}
+	}
+	if code := getJSON(t, srv.URL+"/api/export?format=har", &har); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if har.Log.Version != "1.2" || len(har.Log.Entries) != 2 {
+		t.Fatalf("har = %+v", har)
+	}
+	h := har.Log.Entries[0]
+	if h.Request.Method != "POST" || h.Request.URL != "https://api.example.com/v1/x?a=1" || h.Response.Status != 201 ||
+		h.Time != 15 || h.Route != "override:10.0.0.1" || h.Request.PostData.Text != `{"k":1}` ||
+		h.Response.Content.Encoding != "base64" || len(h.Request.QueryString) != 1 {
+		t.Errorf("entry = %+v", h)
+	}
+	if h.Timings["connect"] != 5 || h.Timings["ssl"] != 3 || h.Timings["wait"] != 4 || h.Timings["receive"] != 5 {
+		t.Errorf("timings = %v", h.Timings)
+	}
+	if tu := har.Log.Entries[1]; tu.Request.Method != "CONNECT" || tu.Request.URL != "https://t.example.com:8443/" {
+		t.Errorf("tunnel entry = %+v", tu)
+	}
+
+	var all []map[string]any
+	getJSON(t, srv.URL+"/api/export?format=json", &all)
+	if len(all) != 2 || all[0]["req_body"] == nil {
+		t.Errorf("json export = %v", all)
+	}
+	if code := getJSON(t, srv.URL+"/api/export?format=xml", nil); code != http.StatusBadRequest {
+		t.Errorf("bad format: status %d", code)
+	}
+}

@@ -396,3 +396,31 @@ func TestEventsTunnelError(t *testing.T) {
 		t.Errorf("event = %+v", e)
 	}
 }
+
+func TestCaptureBodies(t *testing.T) {
+	srv, _ := backend(t, "backend-response-body", false)
+	col := collector.New(10)
+	proxyURL := startProxy(t, Config{
+		Rules:         mustRules(t, "127.0.0.1 api.example.com\n"),
+		Collector:     col,
+		CaptureBodies: 10,
+	})
+	c := client(t, proxyURL, nil)
+	resp, err := c.Post("http://api.example.com:"+port(t, srv)+"/", "text/plain", strings.NewReader("short"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	e := waitDone(t, col, 1)[0]
+	if string(e.ReqBody) != "short" || e.ReqTruncated {
+		t.Errorf("request body = %q truncated=%v", e.ReqBody, e.ReqTruncated)
+	}
+	if string(e.RespBody) != "backend-re" || !e.RespTruncated {
+		t.Errorf("response body = %q truncated=%v", e.RespBody, e.RespTruncated)
+	}
+	if e.BytesDown != int64(len("backend-response-body")) {
+		t.Errorf("bytes down = %d", e.BytesDown)
+	}
+}

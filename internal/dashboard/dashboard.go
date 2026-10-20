@@ -29,6 +29,8 @@ type Options struct {
 	// Info is shown in the UI header (listen address, upstream, MITM...).
 	Info   map[string]string
 	Logger *slog.Logger
+	// Version is reported in HAR exports.
+	Version string
 	// AllowedHosts are extra Host header values accepted besides loopback
 	// names, e.g. the dashboard listen host when not on loopback.
 	AllowedHosts []string
@@ -54,6 +56,7 @@ func New(opt Options) *Server {
 	s.mux.HandleFunc("GET /api/rules", s.handleRules)
 	s.mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.mux.HandleFunc("POST /api/clear", s.handleClear)
+	s.mux.HandleFunc("GET /api/export", s.handleExport)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
 	return s
 }
@@ -76,9 +79,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:")
 	s.mux.ServeHTTP(w, r)
 }
-
-// Handle registers an extra handler (e.g. exports).
-func (s *Server) Handle(pattern string, h http.Handler) { s.mux.Handle(pattern, h) }
 
 func (s *Server) hostAllowed(hostport string) bool {
 	host := hostport
