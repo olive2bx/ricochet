@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +34,10 @@ type options struct {
 	dashboard    string
 	history      int
 	noKeepAlive  bool
+	mitm         bool
+	mitmHosts    string
+	caDir        string
+	maskHeaders  string
 	verbose      bool
 }
 
@@ -46,6 +51,10 @@ func main() {
 	flag.StringVar(&o.dashboard, "dashboard", "127.0.0.1:8081", `dashboard listen address ("" to disable)`)
 	flag.IntVar(&o.history, "history", 5000, "number of requests kept in memory")
 	flag.BoolVar(&o.noKeepAlive, "no-keepalive", false, "disable connection reuse towards servers (per-request DNS/connect/TLS timings)")
+	flag.BoolVar(&o.mitm, "mitm", false, "decrypt (MITM) every HTTPS connection")
+	flag.StringVar(&o.mitmHosts, "mitm-hosts", "", "comma-separated hosts to decrypt, e.g. *.example.com,api.foo.com")
+	flag.StringVar(&o.caDir, "ca-dir", "./.ricochet-ca", "directory of the local MITM CA (created on first use)")
+	flag.StringVar(&o.maskHeaders, "mask-headers", strings.Join(proxy.DefaultMaskedHeaders, ","), `headers whose values are hidden in the dashboard ("" to show everything)`)
 	flag.BoolVar(&o.verbose, "verbose", false, "verbose logs")
 	flag.Parse()
 
@@ -82,6 +91,24 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 
 	col := collector.New(o.history)
 
+	var ca *tls.Certificate
+	mitmHosts := splitList(o.mitmHosts)
+	caPath := ""
+	if o.mitm || len(mitmHosts) > 0 {
+		var created bool
+		ca, caPath, created, err = proxy.LoadOrCreateCA(o.caDir)
+		if err != nil {
+			return fmt.Errorf("MITM CA: %w", err)
+		}
+		if created {
+			logger.Info("generated a new local MITM CA (not installed anywhere)", "cert", caPath)
+		}
+	}
+	mask := splitList(o.maskHeaders)
+	if mask == nil {
+		mask = []string{}
+	}
+
 	p, err := proxy.New(proxy.Config{
 		Rules:        store,
 		Upstream:     upstream,
@@ -90,6 +117,10 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		Logger:       logger,
 		Collector:    col,
 		NoKeepAlive:  o.noKeepAlive,
+		MaskHeaders:  mask,
+		CA:           ca,
+		MITM:         o.mitm,
+		MITMHosts:    mitmHosts,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
@@ -118,6 +149,14 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		logger.Debug("rule", "pattern", r.Pattern, "line", r.String())
 	}
 	logger.Info("usage: curl -x http://" + ln.Addr().String() + " https://example.com/")
+	if ca != nil {
+		scope := "all hosts"
+		if !o.mitm {
+			scope = strings.Join(mitmHosts, ",")
+		}
+		logger.Info("MITM enabled", "hosts", scope, "ca", caPath)
+		logger.Info(fmt.Sprintf("trust the CA per command, e.g.: SSL_CERT_FILE=%s curl -x http://%s https://...  (or curl --cacert %s)", caPath, ln.Addr(), caPath))
+	}
 
 	srv := &http.Server{
 		Handler:           p,
@@ -145,6 +184,12 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 			}
 		}
 		info := map[string]string{"proxy": ln.Addr().String(), "amont": upstreamDesc}
+		switch {
+		case o.mitm:
+			info["mitm"] = "tous les hosts"
+		case len(mitmHosts) > 0:
+			info["mitm"] = strings.Join(mitmHosts, ",")
+		}
 		dash = &http.Server{
 			Handler: dashboard.New(dashboard.Options{
 				Collector:    col,

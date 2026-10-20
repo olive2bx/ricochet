@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/elazarl/goproxy"
 
 	"github.com/olive2bx/ricochet/internal/collector"
+	"github.com/olive2bx/ricochet/internal/rules"
 )
 
 // Config configures a Proxy.
@@ -43,6 +45,17 @@ type Config struct {
 	// NoKeepAlive disables connection reuse towards servers so that every
 	// request has its own DNS/connect/TLS timings.
 	NoKeepAlive bool
+
+	// CA signs the certificates presented to clients for MITM'd hosts.
+	// Required when MITM or MITMHosts is set.
+	CA *tls.Certificate
+	// MITM decrypts every HTTPS connection.
+	MITM bool
+	// MITMHosts lists the hosts ("a.com", "*.b.com") to decrypt.
+	MITMHosts []string
+	// TLSClientConfig is used towards servers for MITM'd requests. Nil
+	// means the system roots.
+	TLSClientConfig *tls.Config
 }
 
 // Proxy is an HTTP proxy handler.
@@ -57,6 +70,9 @@ type Proxy struct {
 	col          *collector.Collector
 	mask         []string
 	captureLimit int
+
+	mitmAll   bool
+	mitmHosts []string
 }
 
 // New builds a Proxy.
@@ -85,6 +101,11 @@ func New(cfg Config) (*Proxy, error) {
 
 		col:          cfg.Collector,
 		captureLimit: max(0, cfg.CaptureBodies),
+		mitmAll:      cfg.MITM,
+		mitmHosts:    cfg.MITMHosts,
+	}
+	if (p.mitmAll || len(p.mitmHosts) > 0) && cfg.CA == nil {
+		return nil, errors.New("MITM requires a CA")
 	}
 	mask := cfg.MaskHeaders
 	if mask == nil {
@@ -101,6 +122,7 @@ func New(cfg Config) (*Proxy, error) {
 		DialContext:           p.dialOverride,
 		ForceAttemptHTTP2:     false,
 		DisableKeepAlives:     cfg.NoKeepAlive,
+		TLSClientConfig:       cfg.TLSClientConfig,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -120,7 +142,31 @@ func New(cfg Config) (*Proxy, error) {
 	})
 	p.gp = gp
 	p.installRoundTripper()
+	if cfg.CA != nil && (p.mitmAll || len(p.mitmHosts) > 0) {
+		gp.CertStore = newCertCache()
+		mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(cfg.CA)}
+		gp.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+			if p.shouldMITM(host) {
+				return mitm, host
+			}
+			return nil, host // fall through to the plain tunnel
+		})
+	}
 	return p, nil
+}
+
+// shouldMITM reports whether CONNECT requests to hostport are decrypted.
+func (p *Proxy) shouldMITM(hostport string) bool {
+	if p.mitmAll {
+		return true
+	}
+	host, _ := splitPort(hostPortDefault(hostport, "443"))
+	for _, pat := range p.mitmHosts {
+		if rules.MatchPattern(pat, host) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeHTTP implements http.Handler.
