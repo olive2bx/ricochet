@@ -31,6 +31,17 @@ grep -q 'doit être sourcé' "$tmp/err" || {
 
 cat >"$tmp/driver" <<'EOF'
 fail() { echo "FAIL: $*"; exit 1; }
+# gone PID : attend (5 s max) que le processus ait terminé ; un zombie pas
+# encore récupéré par son parent compte comme terminé.
+gone() {
+	i=0
+	while kill -0 "$1" 2>/dev/null; do
+		case $(ps -o stat= -p "$1" 2>/dev/null) in Z*) return 0 ;; esac
+		i=$((i + 1))
+		[ $i -lt 50 ] || return 1
+		sleep 0.1
+	done
+}
 dir=$1
 export RICOCHET_PORT=39129 RICOCHET_UI_PORT=39130
 export http_proxy='http://alice:s3cret@127.0.0.1:9' https_proxy='http://alice:s3cret@127.0.0.1:9'
@@ -64,12 +75,39 @@ case $out in *'tourne déjà'*) ;; *) fail "message « tourne déjà » absent: 
 [ "$https_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "https_proxy non restauré"
 [ -z "${HTTP_PROXY+x}" ] || fail "HTTP_PROXY aurait dû être supprimée"
 [ -z "${RICOCHET_SAVED_VARS+x}" ] || fail "état non nettoyé"
-sleep 0.2
-kill -0 "$pid" 2>/dev/null && fail "processus toujours actif"
+gone "$pid" || fail "processus toujours actif"
 [ ! -f "$dir/ricochet.pid" ] || fail "pidfile non supprimé"
 
 # Arrêt sans ricochet actif : message informatif, pas d'erreur.
 . "$dir/ricochet-off.sh" | grep -q "n'était pas" || fail "message d'arrêt à vide absent"
+
+# Instance lancée hors de ce terminal (pas de pidfile) : réutilisée, pas relancée.
+"$dir/ricochet" --listen 127.0.0.1:39129 --dashboard 127.0.0.1:39130 --upstream http://127.0.0.1:9 >"$dir/other.log" 2>&1 &
+other=$!
+i=0
+until "$dir/ricochet" --dashboard 127.0.0.1:39130 --ping >/dev/null; do
+	i=$((i + 1)); [ $i -lt 50 ] || fail "instance externe non démarrée"; sleep 0.1
+done
+out=$(. "$dir/ricochet-on.sh" 2>&1) || fail "activation avec instance externe: $out"
+case $out in *"tourne déjà (pid $other)"*) ;; *) fail "instance externe non détectée: $out" ;; esac
+case $out in *'autre terminal'*) ;; *) fail "message « autre terminal » absent: $out" ;; esac
+case $out in *'démarré'*) fail "une seconde instance a été lancée: $out" ;; esac
+. "$dir/ricochet-on.sh" >/dev/null 2>&1 || fail "activation (shell courant)"
+[ "$http_proxy" = "$want" ] || fail "http_proxy non positionné avec instance externe"
+out=$(. "$dir/ricochet-off.sh") || fail "arrêt instance externe"
+case $out in *"arrêté (pid $other)"*) ;; *) fail "instance externe non arrêtée: $out" ;; esac
+. "$dir/ricochet-off.sh" >/dev/null
+gone "$other" || fail "instance externe toujours active"
+grep -q 'shutdown requested through the dashboard API' "$dir/other.log" || fail "arrêt non propre"
+
+# Port déjà occupé par un autre programme (ici un ricochet sans dashboard).
+"$dir/ricochet" --listen 127.0.0.1:39129 --dashboard '' >/dev/null 2>&1 &
+squatter=$!
+sleep 0.5
+out=$(. "$dir/ricochet-on.sh" 2>&1) && fail "activation aurait dû échouer (port occupé)"
+kill "$squatter"
+case $out in *'déjà utilisé par un autre programme'*) ;; *) fail "message port occupé absent: $out" ;; esac
+[ "$http_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "variables modifiées malgré l'échec"
 echo "OK ($0)"
 EOF
 

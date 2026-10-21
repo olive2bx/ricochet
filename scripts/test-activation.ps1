@@ -63,6 +63,42 @@ try {
 
     $out = & (Join-Path $tmp 'ricochet-off.ps1') 6>&1 | Out-String
     if ($out -notmatch "n'était pas") { Fail "message d'arrêt à vide absent" }
+
+    # Instance lancée hors de cette session (pas de pidfile) : réutilisée, pas relancée.
+    $bin = Join-Path $tmp $exe
+    $otherLog = Join-Path $tmp 'other.log'
+    $other = Start-Process -FilePath $bin -PassThru -RedirectStandardError $otherLog `
+        -ArgumentList '--listen', '127.0.0.1:39129', '--dashboard', '127.0.0.1:39130', '--upstream', 'http://127.0.0.1:9'
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+        Start-Sleep -Milliseconds 100
+        & $bin --dashboard 127.0.0.1:39130 --ping | Out-Null
+    } until ($LASTEXITCODE -eq 0 -or (Get-Date) -gt $deadline)
+    if ($LASTEXITCODE -ne 0) { Fail 'instance externe non démarrée' }
+
+    $out = & (Join-Path $tmp 'ricochet-on.ps1') 6>&1 | Out-String
+    if ($out -notmatch "tourne déjà \(pid $($other.Id)\)") { Fail "instance externe non détectée: $out" }
+    if ($out -notmatch 'autre terminal') { Fail "message « autre terminal » absent: $out" }
+    if ($out -match 'démarré \(pid') { Fail "une seconde instance a été lancée: $out" }
+    if ($env:HTTPS_PROXY -ne $want) { Fail 'HTTPS_PROXY non positionné avec instance externe' }
+    $out = & (Join-Path $tmp 'ricochet-off.ps1') 6>&1 | Out-String
+    if ($out -notmatch "arrêté \(pid $($other.Id)\)") { Fail "instance externe non arrêtée: $out" }
+    if (-not $other.WaitForExit(5000)) { Fail 'instance externe toujours active' }
+    if ((Get-Content $otherLog -Raw) -notmatch 'shutdown requested through the dashboard API') { Fail 'arrêt non propre' }
+    if ($env:HTTPS_PROXY -ne $original) { Fail 'HTTPS_PROXY non restauré après instance externe' }
+
+    # Port déjà occupé par un autre programme (ici un ricochet sans dashboard).
+    $squatter = Start-Process -FilePath $bin -PassThru -RedirectStandardError (Join-Path $tmp 'squat.log') `
+        -ArgumentList '--listen', '127.0.0.1:39129', '--dashboard', '""'
+    Start-Sleep -Milliseconds 800
+    try {
+        $out = & (Join-Path $tmp 'ricochet-on.ps1') 6>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) { Fail "activation aurait dû échouer (port occupé): $out" }
+        if ($out -notmatch 'déjà utilisé par un autre programme') { Fail "message port occupé absent: $out" }
+        if ($env:HTTPS_PROXY -ne $original) { Fail "variables modifiées malgré l'échec" }
+    } finally {
+        Stop-Process -Id $squatter.Id -Force -ErrorAction SilentlyContinue
+    }
     Write-Host 'OK (test-activation.ps1)'
 } finally {
     $pidFile = Join-Path $tmp 'ricochet.pid'

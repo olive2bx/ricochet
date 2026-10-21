@@ -67,10 +67,18 @@ func main() {
 	flag.IntVar(&o.dbMaxRows, "db-max-rows", history.DefaultMaxRows, "max events kept in the SQLite history")
 	flag.BoolVar(&o.verbose, "verbose", false, "verbose logs")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	ping := flag.Bool("ping", false, "check whether a ricochet instance answers on --dashboard, print its pid and exit (0 = running, 1 = not running)")
+	stopInstance := flag.Bool("stop", false, "gracefully stop the ricochet instance whose dashboard is --dashboard and exit (0 = stopped, 1 = not running)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("ricochet", version)
 		return
+	}
+	if *ping {
+		os.Exit(cmdPing(o.dashboard, os.Stdout))
+	}
+	if *stopInstance {
+		os.Exit(cmdStop(o.dashboard, os.Stdout, 10*time.Second))
 	}
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "unexpected arguments: %v\n", flag.Args())
@@ -103,6 +111,10 @@ func main() {
 }
 
 func run(ctx context.Context, o options, logger *slog.Logger) error {
+	// Cancelled by SIGINT/SIGTERM or by POST /api/shutdown (ricochet --stop).
+	ctx, shutdown := context.WithCancel(ctx)
+	defer shutdown()
+
 	store, err := rules.NewStore(o.rulesPath)
 	if err != nil {
 		return fmt.Errorf("load rules: %w", err)
@@ -251,6 +263,8 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 				Logger:       logger,
 				AllowedHosts: allowed,
 				Version:      version,
+				Status:       map[string]any{"proxy": ln.Addr().String(), "upstream": upstreamDesc},
+				Shutdown:     shutdown,
 			}),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),

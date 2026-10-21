@@ -31,6 +31,7 @@ fi
 __ricochet_on() {
 	if [ -n "${ZSH_VERSION:-}" ]; then setopt local_options sh_word_split; fi
 	local dir bin port ui_port rules pidfile log proxy_url upstream pid v val i
+	local ping_out run_up shown_up
 	local c_ok='' c_warn='' c_err='' c_dim='' c_off=''
 	if [ -t 1 ]; then
 		c_ok=$(printf '\033[32m') c_warn=$(printf '\033[33m') c_err=$(printf '\033[31m')
@@ -88,9 +89,28 @@ __ricochet_on() {
 			"$c_warn" "$(__ricochet_redact "$upstream")" "$c_off"
 	fi
 
-	if __ricochet_running "$pidfile"; then
-		pid=$(cat "$pidfile")
+	# Instance déjà lancée ? On interroge son dashboard : fiable quel que soit
+	# le terminal (bash, zsh, Git Bash, PowerShell) ou la façon de la lancer.
+	shown_up=$(__ricochet_hostport "$upstream")
+	ping_out=$("$bin" --dashboard "127.0.0.1:$ui_port" --ping 2>/dev/null)
+	if [ -n "$ping_out" ]; then
+		pid=$(printf '%s\n' "$ping_out" | sed -n 's/^pid=//p')
+		run_up=$(printf '%s\n' "$ping_out" | sed -n 's/^upstream=//p')
+		[ "$run_up" = "none (direct)" ] && run_up=''
 		printf '%s● ricochet tourne déjà (pid %s)%s\n' "$c_ok" "$pid" "$c_off"
+		if [ "$(cat "$pidfile" 2>/dev/null)" != "$pid" ]; then
+			printf '  %slancé depuis un autre terminal : ce terminal l'"'"'utilise sans le relancer%s\n' "$c_dim" "$c_off"
+		fi
+		if [ "$run_up" != "$shown_up" ]; then
+			printf '%s! l'"'"'instance en cours utilise l'"'"'amont « %s » et non « %s » ;%s\n' \
+				"$c_warn" "${run_up:-aucun}" "${shown_up:-aucun}" "$c_off"
+			printf '%s  pour changer : ricochet-off puis ricochet-on%s\n' "$c_warn" "$c_off"
+		fi
+		shown_up=$run_up
+	elif __ricochet_running "$pidfile"; then
+		# Processus présent mais dashboard muet (démarrage en cours).
+		pid=$(cat "$pidfile")
+		printf '%s● ricochet tourne déjà (pid %s), dashboard pas encore joignable%s\n' "$c_warn" "$pid" "$c_off"
 	else
 		rm -f "$pidfile"
 		if [ ! -f "$rules" ]; then
@@ -110,7 +130,13 @@ __ricochet_on() {
 		i=0
 		while ! grep -q 'msg="ricochet started"' "$log" 2>/dev/null; do
 			if ! kill -0 "$pid" 2>/dev/null || [ $i -ge 50 ]; then
-				printf '%s✖ ricochet n'"'"'a pas démarré. Dernières lignes de %s :%s\n' "$c_err" "$log" "$c_off" >&2
+				printf '%s✖ ricochet n'"'"'a pas démarré.%s\n' "$c_err" "$c_off" >&2
+				# « listen tcp ...: bind: » : port pris (message système traduit selon la langue).
+				if grep -qE 'listen tcp [^ ]+: bind:' "$log" 2>/dev/null; then
+					printf '  le port %s ou %s est déjà utilisé par un autre programme\n' "$port" "$ui_port" >&2
+					printf '  (autres ports : RICOCHET_PORT=… RICOCHET_UI_PORT=…)\n' >&2
+				fi
+				printf '  dernières lignes de %s :\n' "$log" >&2
 				tail -n 5 "$log" >&2
 				kill "$pid" 2>/dev/null
 				rm -f "$pidfile"
@@ -129,8 +155,8 @@ __ricochet_on() {
 	val=$(grep -o 'rule_count=[0-9]*' "$log" 2>/dev/null | tail -n 1 | cut -d= -f2)
 	printf '  proxy     : %s  %s(http_proxy, https_proxy, HTTP_PROXY, HTTPS_PROXY)%s\n' "$proxy_url" "$c_dim" "$c_off"
 	printf '  dashboard : http://127.0.0.1:%s/\n' "$ui_port"
-	if [ -n "$upstream" ]; then
-		printf '  amont     : %s\n' "$(__ricochet_redact "$upstream")"
+	if [ -n "$shown_up" ]; then
+		printf '  amont     : %s\n' "$shown_up"
 	else
 		printf '  amont     : aucun (connexions directes)\n'
 	fi
@@ -148,6 +174,16 @@ __ricochet_running() {
 	# Évite un faux positif si le pid a été réutilisé (ps -o absent : on accepte).
 	comm=$(ps -p "$pid" -o comm= 2>/dev/null) || return 0
 	case $comm in *ricochet*) return 0 ;; *) return 1 ;; esac
+}
+
+# hôte:port d'une URL de proxy, sans identifiants (port 80 par défaut, comme
+# ricochet) ; vide si l'URL est vide.
+__ricochet_hostport() {
+	local hp
+	[ -n "$1" ] || return 0
+	hp=$(printf '%s' "$1" | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^@/]*@##; s#/.*$##')
+	case $hp in *:*) ;; *) hp=$hp:80 ;; esac
+	printf '%s' "$hp"
 }
 
 # Masque les identifiants d'une URL de proxy.
@@ -171,6 +207,6 @@ EOF
 
 __ricochet_on "$__rc_src"
 __rc_status=$?
-unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_rules_template
+unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template
 unset __rc_src __rc_sourced
 eval "unset __rc_status; return $__rc_status"
