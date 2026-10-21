@@ -18,11 +18,13 @@ Proxy HTTP/HTTPS local, en un seul binaire Go, pour déboguer des outils shell
 
 ## Compilation
 
-Aucune dépendance système, pas de CGO. Il faut **Go ≥ 1.27.3** (fixé dans
-`go.mod`). Avec un Go plus ancien, la toolchain est téléchargée automatiquement
-via `GOPROXY` (`GOTOOLCHAIN=auto`, comportement par défaut) : derrière
-Artifactory, le module `golang.org/toolchain` doit donc être accessible, sinon
-installez Go 1.27.3 localement.
+Aucune dépendance système, pas de CGO. Il faut **Go ≥ 1.26** (fixé dans
+`go.mod` ; c'est aussi le minimum requis par `modernc.org/sqlite`). La CI teste
+cette version minimale et la dernière stable, qui sert à compiler les binaires
+de release. Avec un Go plus ancien, la toolchain est téléchargée
+automatiquement via `GOPROXY` (`GOTOOLCHAIN=auto`) : derrière Artifactory, le
+module `golang.org/toolchain` doit donc être accessible, sinon installez un Go
+1.26 ou plus récent.
 
 ```sh
 CGO_ENABLED=0 go build -o ricochet ./cmd/ricochet

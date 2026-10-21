@@ -1,6 +1,6 @@
 module github.com/olive2bx/ricochet
 
-go 1.27.3
+go 1.26.0
 
 require (
 	github.com/elazarl/goproxy v1.9.2
