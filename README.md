@@ -193,6 +193,44 @@ le détail) ; `--no-keepalive` force des connexions neuves.
 Le dashboard refuse les requêtes dont le `Host` n'est pas une adresse loopback
 (protection contre le DNS rebinding) et les `POST` d'une autre origine.
 
+## Makefile
+
+Le `Makefile` ne fait qu'appeler l'outil `go` (les commandes `go` ci-dessus
+restent utilisables sans `make`, par exemple sous Windows). `make help` liste
+les cibles :
+
+| Cible | Rôle |
+|---|---|
+| `make` / `make build` | binaire `./ricochet` (sans SQLite) |
+| `make build-sqlite` | binaire avec l'historique SQLite |
+| `make run ARGS="--rules rules.txt"` | compile et lance |
+| `make test` / `make test-sqlite` / `make test-race` | tests (`test-race` nécessite CGO) |
+| `make fmt` / `make vet` / `make lint` / `make vuln` | gofmt, go vet, staticcheck, govulncheck |
+| `make ci` | toutes les vérifications de la CI (format, `go mod tidy`, vet, staticcheck, tests) |
+| `make dist` | binaires de toutes les plateformes, avec et sans SQLite, + `SHA256SUMS` dans `dist/` |
+
+La version embarquée vient de `git describe` (surcharge : `make build VERSION=1.2.3`).
+staticcheck et govulncheck sont lancés via `go run` à une version figée :
+rien à installer, mais ils doivent être téléchargeables via `GOPROXY`.
+
+## CI/CD (GitHub Actions)
+
+- **`ci.yml`**, sur chaque PR et push sur `main` :
+  - lint : gofmt, `go mod tidy`, `go vet`, staticcheck ;
+  - tests sur Linux, macOS et Windows, avec la version Go de `go.mod` et la
+    dernière stable, avec et sans `-tags sqlite`, et le détecteur de courses
+    hors Windows ;
+  - govulncheck ;
+  - cross-compilation de toutes les cibles, binaires publiés en artefact.
+- **`release.yml`**, sur un tag `v*` : vérifications, puis release GitHub avec
+  les 12 binaires (6 plateformes × avec/sans SQLite) et `SHA256SUMS` :
+
+  ```sh
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+- **Dependabot** : mises à jour hebdomadaires des modules Go et mensuelles des
+  actions.
+
 ## Tests
 
 ```sh

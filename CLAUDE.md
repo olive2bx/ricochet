@@ -183,7 +183,9 @@ type Event struct {
 
 Phases 1 à 4 implémentées. SQLite est derrière le build tag `sqlite`
 (`go build -tags sqlite`) pour garder le binaire par défaut léger ; tester
-avec `go test ./...` et `go test -tags sqlite ./...`.
+avec `go test ./...` et `go test -tags sqlite ./...`, ou `make ci` (mêmes
+vérifications que la CI GitHub Actions : `.github/workflows/ci.yml`).
+Release : pousser un tag `v*` (`.github/workflows/release.yml`).
 
 ## Conventions
 
