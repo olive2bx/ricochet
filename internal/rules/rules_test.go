@@ -126,6 +126,21 @@ func TestParseEmpty(t *testing.T) {
 	}
 }
 
+func TestParseBOMAndCRLF(t *testing.T) {
+	for _, input := range []string{
+		"\uFEFF# Notepad\r\n10.0.0.1 a.com\r\n",
+		"\uFEFF10.0.0.1 a.com\r\n",
+	} {
+		s, err := Parse(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", input, err)
+		}
+		if ip, _, ok := s.Resolve("a.com"); !ok || ip.String() != "10.0.0.1" {
+			t.Errorf("Parse(%q): Resolve = %v, %v", input, ip, ok)
+		}
+	}
+}
+
 func TestIPv4MappedIsUnmapped(t *testing.T) {
 	s, err := Parse(strings.NewReader("::ffff:10.0.0.1 a.com\n"))
 	if err != nil {

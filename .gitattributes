@@ -1,0 +1,2 @@
+# Scripts shell : toujours en LF, même sur un checkout Windows.
+*.sh text eol=lf

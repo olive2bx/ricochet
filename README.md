@@ -62,6 +62,68 @@ HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 kubectl get p
 git -c http.proxy=http://127.0.0.1:8080 fetch
 ```
 
+## Activation dans le terminal (scripts)
+
+Pour un usage quotidien, les scripts `ricochet-on` / `ricochet-off` évitent de
+lancer ricochet et de changer les variables proxy à la main.
+
+### Installation
+
+```sh
+make install
+```
+
+Le menu demande le dossier d'installation (`~/.ricochet` par défaut) et la
+variante (standard ou SQLite). La plateforme (OS et architecture) est détectée
+automatiquement. Il compile le binaire et copie les quatre scripts dans ce
+dossier. Sans question : `make install INSTALL_DIR=~/.ricochet VARIANT=sqlite`.
+
+### Utilisation
+
+| | bash / zsh (Linux, macOS, Git Bash) | PowerShell (Windows) |
+|---|---|---|
+| activer | `. ~/.ricochet/ricochet-on.sh` | `& "$HOME\.ricochet\ricochet-on.ps1"` |
+| désactiver | `. ~/.ricochet/ricochet-off.sh` | `& "$HOME\.ricochet\ricochet-off.ps1"` |
+
+En bash/zsh, les scripts doivent être **sourcés** (le `.` initial) : un script
+lancé normalement ne peut pas modifier les variables du terminal. Ils le
+détectent et l'indiquent. Des alias pratiques, affichés par `make install` :
+
+```sh
+alias ricochet-on='. ~/.ricochet/ricochet-on.sh'
+alias ricochet-off='. ~/.ricochet/ricochet-off.sh'
+```
+
+`ricochet-on` :
+
+1. mémorise `http_proxy`, `https_proxy`, `HTTP_PROXY` et `HTTPS_PROXY` ;
+2. démarre ricochet en arrière-plan sur `127.0.0.1:3129` (dashboard sur
+   `127.0.0.1:3130`) avec le proxy d'origine comme amont (`https_proxy` en
+   priorité, puis `http_proxy`) et les règles de `ricochet-rules.txt` (créé
+   s'il n'existe pas, rechargé à chaud) ;
+3. fait pointer les quatre variables sur ricochet et affiche un résumé
+   (pid, dashboard, amont avec identifiants masqués, nombre de règles, logs).
+
+`ricochet-off` arrête le processus et restaure exactement les variables
+d'origine (y compris celles qui n'étaient pas définies).
+
+Une seconde activation ne relance rien et garde l'amont d'origine. Un terminal
+peut s'activer alors que ricochet tourne déjà (lancé depuis un autre
+terminal) ; l'arrêt, lui, coupe ricochet pour tous les terminaux.
+
+Variables facultatives : `RICOCHET_PORT`, `RICOCHET_UI_PORT`, `RICOCHET_RULES`
+(chemin du fichier de règles), `RICOCHET_BIN`, `RICOCHET_ARGS` (options
+supplémentaires, ex. `--mitm-hosts '*.exemple.com'`). Le pid et les logs sont
+dans le dossier d'installation (`ricochet.pid`, `ricochet.log`).
+
+L'amont est transmis via la variable `RICOCHET_UPSTREAM` et non en argument :
+les identifiants d'un proxy `http://user:pass@hôte:port` n'apparaissent ni
+dans la liste des processus, ni dans les logs, ni dans le dashboard.
+
+Sous Windows, si la stratégie d'exécution bloque les scripts :
+`Set-ExecutionPolicy -Scope Process Bypass` (pour la session courante
+uniquement). L'arrêt sous Windows est immédiat (pas de signal d'arrêt propre).
+
 ## Options
 
 | Flag | Défaut | Description |
@@ -69,7 +131,7 @@ git -c http.proxy=http://127.0.0.1:8080 fetch
 | `--listen` | `127.0.0.1:8080` | adresse d'écoute du proxy |
 | `--dashboard` | `127.0.0.1:8081` | adresse du dashboard (`""` pour le désactiver) |
 | `--rules` | *(aucun)* | fichier de règles FQDN → IP, rechargé à chaud |
-| `--upstream` | *(direct)* | proxy amont `http://host:port` |
+| `--upstream` | *(direct)* | proxy amont `http://host:port` (ou env `RICOCHET_UPSTREAM`) |
 | `--upstream-auth` | | `user:pass` pour l'amont (ou env `RICOCHET_UPSTREAM_AUTH`) |
 | `--bypass` | | hosts qui ignorent l'amont : `a.com,*.b.com` |
 | `--mitm` | `false` | déchiffre toutes les connexions HTTPS |
@@ -214,6 +276,8 @@ les cibles :
 | `make fmt` / `make vet` / `make lint` / `make vuln` | gofmt, go vet, staticcheck, govulncheck |
 | `make ci` | toutes les vérifications de la CI (format, `go mod tidy`, vet, staticcheck, tests) |
 | `make dist` | binaires de toutes les plateformes, avec et sans SQLite, + `SHA256SUMS` dans `dist/` |
+| `make install` | menu interactif : installe le binaire et les scripts `ricochet-on` / `ricochet-off` |
+| `make test-scripts` | teste les scripts (bash, zsh et pwsh s'ils sont présents, shellcheck) |
 
 La version embarquée vient de `git describe` (surcharge : `make build VERSION=1.2.3`).
 staticcheck et govulncheck sont lancés via `go run` à une version figée :
@@ -257,3 +321,7 @@ en bout avec des serveurs locaux : override HTTP et HTTPS (vérification du
 `Host` et du SNI), chaînage via un faux proxy amont qui enregistre les
 `CONNECT` et l'authentification, MITM, mesures, capture des corps, dashboard
 (API, SSE, protections) et export HAR.
+
+Les scripts d'activation ont leurs propres tests (`make test-scripts`) :
+démarrage, variables, amont, masquage des identifiants, idempotence, arrêt et
+restauration, en bash, zsh, PowerShell 7 et Windows PowerShell 5.1 (CI).

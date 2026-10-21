@@ -52,7 +52,7 @@ func main() {
 	var o options
 	flag.StringVar(&o.listen, "listen", "127.0.0.1:8080", "proxy listen address")
 	flag.StringVar(&o.rulesPath, "rules", "", "FQDN → IP rules file (hosts-like format)")
-	flag.StringVar(&o.upstream, "upstream", "", "upstream HTTP proxy, e.g. http://host:3128 (default: direct)")
+	flag.StringVar(&o.upstream, "upstream", "", "upstream HTTP proxy, e.g. http://host:3128 (or env RICOCHET_UPSTREAM; default: direct)")
 	flag.StringVar(&o.upstreamAuth, "upstream-auth", "", "upstream credentials user:pass (or env RICOCHET_UPSTREAM_AUTH)")
 	flag.StringVar(&o.bypass, "bypass", "", "comma-separated hosts that skip the upstream, e.g. a.com,*.b.com")
 	flag.StringVar(&o.dashboard, "dashboard", "127.0.0.1:8081", `dashboard listen address ("" to disable)`)
@@ -78,6 +78,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Environment fallbacks keep credentials out of the process list.
+	if o.upstream == "" {
+		o.upstream = os.Getenv("RICOCHET_UPSTREAM")
+	}
 	if o.upstreamAuth == "" {
 		o.upstreamAuth = os.Getenv("RICOCHET_UPSTREAM_AUTH")
 	}

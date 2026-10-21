@@ -186,6 +186,9 @@ Phases 1 à 4 implémentées. SQLite est derrière le build tag `sqlite`
 avec `go test ./...` et `go test -tags sqlite ./...`, ou `make ci` (mêmes
 vérifications que la CI GitHub Actions : `.github/workflows/ci.yml`).
 Release : pousser un tag `v*` (`.github/workflows/release.yml`).
+Scripts d'activation dans `scripts/` (`ricochet-on/off` en `.sh` sourcé et
+`.ps1`, installés par `make install`) : tester avec `make test-scripts`. Les
+`.ps1` sont en UTF-8 avec BOM (Windows PowerShell 5.1), les `.sh` en LF.
 
 ## Conventions
 
