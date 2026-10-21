@@ -226,12 +226,19 @@ rien à installer, mais ils doivent être téléchargeables via `GOPROXY`.
     hors Windows ;
   - govulncheck ;
   - cross-compilation de toutes les cibles, binaires publiés en artefact.
-- **`release.yml`**, sur un tag `v*` : vérifications, puis release GitHub avec
-  les 12 binaires (6 plateformes × avec/sans SQLite) et `SHA256SUMS` :
+- **`release.yml`** : vérifications, puis release GitHub avec les 12 binaires
+  (6 plateformes × avec/sans SQLite) et `SHA256SUMS`. Trois façons de la
+  déclencher :
+  - depuis un terminal, en poussant un tag :
 
-  ```sh
-  git tag v0.1.0 && git push origin v0.1.0
-  ```
+    ```sh
+    git tag v0.1.0 && git push origin v0.1.0
+    ```
+  - depuis l'interface GitHub (utilisable sur mobile) : **Actions → Release →
+    Run workflow**, saisir la version (`v0.1.0`) ; le tag est créé sur la
+    branche choisie (`main` par défaut) ;
+  - depuis la page **Releases** : une release publiée à la main (qui crée le
+    tag) reçoit automatiquement les binaires.
 - **Dependabot** : mises à jour hebdomadaires des modules Go et mensuelles des
   actions.
 
