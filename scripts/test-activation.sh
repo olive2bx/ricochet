@@ -79,7 +79,7 @@ gone "$pid" || fail "processus toujours actif"
 [ ! -f "$dir/ricochet.pid" ] || fail "pidfile non supprimé"
 
 # Arrêt sans ricochet actif : message informatif, pas d'erreur.
-. "$dir/ricochet-off.sh" | grep -q "n'était pas" || fail "message d'arrêt à vide absent"
+. "$dir/ricochet-off.sh" | grep "n'était pas" >/dev/null || fail "message d'arrêt à vide absent"
 
 # Instance lancée hors de ce terminal (pas de pidfile) : réutilisée, pas relancée.
 "$dir/ricochet" --listen 127.0.0.1:39129 --dashboard 127.0.0.1:39130 --upstream http://127.0.0.1:9 >"$dir/other.log" 2>&1 &

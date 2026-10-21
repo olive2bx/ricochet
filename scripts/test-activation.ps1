@@ -100,6 +100,9 @@ try {
         Stop-Process -Id $squatter.Id -Force -ErrorAction SilentlyContinue
     }
     Write-Host 'OK (test-activation.ps1)'
+    # Le dernier scénario attend un échec (code 1) : le runner CI termine par
+    # « exit $LASTEXITCODE », qu'on remet donc à zéro.
+    $global:LASTEXITCODE = 0
 } finally {
     $pidFile = Join-Path $tmp 'ricochet.pid'
     if (Test-Path $pidFile) { Stop-Process -Id ([int](Get-Content $pidFile -Raw).Trim()) -Force -ErrorAction SilentlyContinue }
