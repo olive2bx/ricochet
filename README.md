@@ -18,7 +18,11 @@ Proxy HTTP/HTTPS local, en un seul binaire Go, pour déboguer des outils shell
 
 ## Compilation
 
-Aucune dépendance système, pas de CGO :
+Aucune dépendance système, pas de CGO. Il faut **Go ≥ 1.27.3** (fixé dans
+`go.mod`). Avec un Go plus ancien, la toolchain est téléchargée automatiquement
+via `GOPROXY` (`GOTOOLCHAIN=auto`, comportement par défaut) : derrière
+Artifactory, le module `golang.org/toolchain` doit donc être accessible, sinon
+installez Go 1.27.3 localement.
 
 ```sh
 CGO_ENABLED=0 go build -o ricochet ./cmd/ricochet

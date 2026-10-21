@@ -10,8 +10,12 @@ LDFLAGS  := -s -w -X main.version=$(VERSION)
 GOFLAGS_BUILD := -trimpath -ldflags "$(LDFLAGS)"
 
 # Outils d'analyse lancés via `go run` (versions figées, rien à installer).
-STATICCHECK := honnef.co/go/tools/cmd/staticcheck@2025.1.1
-GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.1.4
+# Ils sont compilés avec la toolchain du projet : sinon `go run` choisit
+# celle du go.mod de l'outil, incapable d'analyser une stdlib plus récente.
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
+GO_TOOLCHAIN := $(shell go env GOVERSION)
+GORUN_TOOL := GOTOOLCHAIN=$(GO_TOOLCHAIN) go run
 
 # Cibles de cross-compilation (GOOS/GOARCH).
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
@@ -77,18 +81,17 @@ vet: ## go vet, avec et sans le tag sqlite
 
 .PHONY: lint
 lint: ## staticcheck, avec et sans le tag sqlite
-	go run $(STATICCHECK) ./...
-	go run $(STATICCHECK) -tags sqlite ./...
+	$(GORUN_TOOL) $(STATICCHECK) ./...
+	$(GORUN_TOOL) $(STATICCHECK) -tags sqlite ./...
 
 .PHONY: vuln
 vuln: ## govulncheck (dépendances et bibliothèque standard)
-	go run $(GOVULNCHECK) ./...
-	go run $(GOVULNCHECK) -tags sqlite ./...
+	$(GORUN_TOOL) $(GOVULNCHECK) ./...
+	$(GORUN_TOOL) $(GOVULNCHECK) -tags sqlite ./...
 
 .PHONY: tidy-check
-tidy-check: ## Échoue si go.mod / go.sum ne sont pas à jour
-	go mod tidy
-	@git diff --exit-code -- go.mod go.sum || (echo "go.mod/go.sum ne sont pas à jour : lancer 'go mod tidy'"; exit 1)
+tidy-check: ## Échoue si go.mod / go.sum ne sont pas à jour (sans les modifier)
+	@go mod tidy -diff || (echo "go.mod/go.sum ne sont pas à jour : lancer 'go mod tidy'"; exit 1)
 
 ## --- Tests ------------------------------------------------------------------
 
