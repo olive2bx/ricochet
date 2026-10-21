@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -318,6 +319,12 @@ func (t *tunnelConn) setErr(err error) {
 	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || t.clientDone.Load() {
 		return
 	}
+	// An encrypted tunnel cannot tell a finished exchange from a cut one.
+	// Servers commonly reset or abort the connection when closing it, so a
+	// reset once data flowed both ways counts as a normal close.
+	if isConnReset(err) && t.up.Load() > 0 && t.down.Load() > 0 {
+		return
+	}
 	t.errMu.Lock()
 	if t.err == nil {
 		t.err = err
@@ -387,6 +394,17 @@ func (t *tunnelConn) finish() {
 	e.Done = true
 	t.p.update(e)
 	t.p.log.Debug("tunnel closed", "host", e.Host, "route", e.Route, "up", e.BytesUp, "down", e.BytesDown, "total", e.Total)
+}
+
+// isConnReset reports a connection reset or abort. Windows reports them as
+// WSAECONNABORTED (10053) and WSAECONNRESET (10054), which the syscall
+// package does not map to ECONNABORTED/ECONNRESET.
+func isConnReset(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.ECONNRESET || errno == syscall.ECONNABORTED || errno == 10053 || errno == 10054
 }
 
 // traceDial dials addr while measuring DNS and TCP connect.
