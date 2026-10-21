@@ -122,6 +122,10 @@ func Parse(r io.Reader) (*Set, error) {
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
+		if n == 1 {
+			// Windows editors often save UTF-8 with a byte order mark.
+			line = strings.TrimPrefix(line, "\uFEFF")
+		}
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
 		}

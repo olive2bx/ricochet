@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Test fonctionnel de ricochet-on.sh / ricochet-off.sh.
+#   scripts/test-activation.sh [bash|zsh]
+# Compile ricochet dans un dossier temporaire, puis vérifie dans le shell
+# demandé : démarrage, variables proxy, amont, masquage des identifiants,
+# idempotence, arrêt et restauration.
+set -eu
+
+shell=${1:-bash}
+repo=$(cd "$(dirname "$0")/.." && pwd -P)
+tmp=$(mktemp -d)
+cleanup() {
+	if [ -f "$tmp/ricochet.pid" ]; then kill "$(cat "$tmp/ricochet.pid")" 2>/dev/null || true; fi
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+(cd "$repo" && go build -o "$tmp/ricochet" ./cmd/ricochet)
+cp "$repo/scripts/ricochet-on.sh" "$repo/scripts/ricochet-off.sh" "$tmp/"
+
+# Lancé directement (non sourcé) : refus explicite.
+if "$shell" "$tmp/ricochet-on.sh" 2>"$tmp/err"; then
+	echo "FAIL: ricochet-on.sh exécuté sans être sourcé aurait dû échouer"
+	exit 1
+fi
+grep -q 'doit être sourcé' "$tmp/err" || {
+	echo "FAIL: message attendu absent"
+	cat "$tmp/err"
+	exit 1
+}
+
+cat >"$tmp/driver" <<'EOF'
+fail() { echo "FAIL: $*"; exit 1; }
+dir=$1
+export RICOCHET_PORT=39129 RICOCHET_UI_PORT=39130
+export http_proxy='http://alice:s3cret@127.0.0.1:9' https_proxy='http://alice:s3cret@127.0.0.1:9'
+unset HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
+
+. "$dir/ricochet-on.sh" || fail "ricochet-on a échoué"
+want=http://127.0.0.1:39129
+for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; do
+	eval "val=\${$v:-}"
+	[ "$val" = "$want" ] || fail "$v=$val, attendu $want"
+done
+[ -f "$dir/ricochet-rules.txt" ] || fail "fichier de règles non créé"
+pid=$(cat "$dir/ricochet.pid")
+kill -0 "$pid" || fail "processus absent"
+
+info=$(curl -fsS --noproxy '*' http://127.0.0.1:39130/api/info) || fail "dashboard injoignable"
+case $info in *'"amont":"127.0.0.1:9"'*) ;; *) fail "amont inattendu: $info" ;; esac
+case $info in *s3cret*) fail "identifiants dans le dashboard" ;; esac
+grep -q s3cret "$dir/ricochet.log" && fail "identifiants dans les logs"
+ps -o args= -p "$pid" | grep -q s3cret && fail "identifiants dans la liste des processus"
+
+# Deuxième activation : idempotente, l'amont mémorisé est conservé.
+out=$(. "$dir/ricochet-on.sh") || fail "seconde activation"
+case $out in *'tourne déjà'*) ;; *) fail "message « tourne déjà » absent: $out" ;; esac
+. "$dir/ricochet-on.sh" >/dev/null || fail "seconde activation (shell courant)"
+[ "$RICOCHET_SAVED_https_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "amont mémorisé écrasé"
+[ "$(cat "$dir/ricochet.pid")" = "$pid" ] || fail "second processus lancé"
+
+. "$dir/ricochet-off.sh" || fail "ricochet-off a échoué"
+[ "$http_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "http_proxy non restauré: $http_proxy"
+[ "$https_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "https_proxy non restauré"
+[ -z "${HTTP_PROXY+x}" ] || fail "HTTP_PROXY aurait dû être supprimée"
+[ -z "${RICOCHET_SAVED_VARS+x}" ] || fail "état non nettoyé"
+sleep 0.2
+kill -0 "$pid" 2>/dev/null && fail "processus toujours actif"
+[ ! -f "$dir/ricochet.pid" ] || fail "pidfile non supprimé"
+
+# Arrêt sans ricochet actif : message informatif, pas d'erreur.
+. "$dir/ricochet-off.sh" | grep -q "n'était pas" || fail "message d'arrêt à vide absent"
+echo "OK ($0)"
+EOF
+
+"$shell" "$tmp/driver" "$tmp"

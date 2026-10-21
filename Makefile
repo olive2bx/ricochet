@@ -64,6 +64,12 @@ checksums:
 		else shasum -a 256 $(BINARY)_* > SHA256SUMS; fi
 	@echo "  $(DIST)/SHA256SUMS"
 
+## --- Installation -----------------------------------------------------------
+
+.PHONY: install
+install: ## Menu interactif : installe le binaire et les scripts ricochet-on/off
+	@VERSION="$(VERSION)" INSTALL_DIR="$(INSTALL_DIR)" VARIANT="$(VARIANT)" sh scripts/install.sh
+
 ## --- Qualité ----------------------------------------------------------------
 
 .PHONY: fmt
@@ -107,6 +113,13 @@ test-sqlite: ## Tests avec le tag sqlite
 test-race: ## Tests avec le détecteur de courses (nécessite CGO)
 	CGO_ENABLED=1 go test -race ./...
 	CGO_ENABLED=1 go test -race -tags sqlite ./...
+
+.PHONY: test-scripts
+test-scripts: ## Teste ricochet-on/off (bash, zsh et pwsh s'ils sont installés, shellcheck)
+	@if command -v shellcheck >/dev/null; then LC_ALL=C.UTF-8 shellcheck -x scripts/*.sh; else echo "shellcheck absent : ignoré"; fi
+	bash scripts/test-activation.sh bash
+	@if command -v zsh >/dev/null; then bash scripts/test-activation.sh zsh; else echo "zsh absent : ignoré"; fi
+	@if command -v pwsh >/dev/null; then pwsh -NoProfile -File scripts/test-activation.ps1; else echo "pwsh absent : ignoré"; fi
 
 .PHONY: cover
 cover: ## Couverture de tests (coverage.out + résumé)

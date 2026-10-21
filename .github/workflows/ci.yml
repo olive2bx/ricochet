@@ -64,6 +64,54 @@ jobs:
           go test -race ./...
           go test -race -tags sqlite ./...
 
+  scripts:
+    name: Scripts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install zsh and shellcheck
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh shellcheck
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck -x scripts/*.sh
+      - name: ricochet-on/off.sh (bash)
+        if: runner.os != 'Windows'
+        run: bash scripts/test-activation.sh bash
+      - name: ricochet-on/off.sh (zsh)
+        if: runner.os != 'Windows'
+        run: bash scripts/test-activation.sh zsh
+      - name: ricochet-on/off.ps1 (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/test-activation.ps1
+      - name: ricochet-on/off.ps1 (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/test-activation.ps1
+      - name: PSScriptAnalyzer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          $all = Invoke-ScriptAnalyzer -Path scripts -Recurse
+          $all | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-String -Width 250
+          if ($all | Where-Object Severity -eq 'Error') { exit 1 }
+      - name: make install (non-interactive)
+        if: runner.os != 'Windows'
+        run: |
+          make install INSTALL_DIR="$RUNNER_TEMP/ricochet" VARIANT=standard
+          "$RUNNER_TEMP/ricochet/ricochet" --version
+          test -f "$RUNNER_TEMP/ricochet/ricochet-on.sh"
+
   vuln:
     name: govulncheck
     runs-on: ubuntu-latest
