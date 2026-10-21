@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ricochet</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%233b82f6'/%3E%3C/svg%3E">
+</head>
+<body>
+<header>
+  <h1>ricochet</h1>
+  <div id="info" class="info"></div>
+  <div id="rules-status" class="rules-status" title="Règles FQDN → IP"></div>
+  <span id="conn" class="conn off" title="Flux temps réel">●</span>
+</header>
+
+<div class="toolbar">
+  <input id="f-text" type="search" placeholder="Filtrer (host, chemin, statut, route…)" autocomplete="off">
+  <select id="f-route" title="Route">
+    <option value="">Toutes routes</option>
+    <option value="override">Override</option>
+    <option value="upstream">Amont</option>
+    <option value="direct">Direct</option>
+  </select>
+  <select id="f-scheme" title="Type">
+    <option value="">Tous types</option>
+    <option value="http">http</option>
+    <option value="https-tunnel">https-tunnel</option>
+    <option value="https-mitm">https-mitm</option>
+  </select>
+  <label class="chk"><input id="f-errors" type="checkbox"> Erreurs</label>
+  <label class="minf">≥ <input id="f-min" type="number" min="0" step="10" placeholder="0"> ms</label>
+  <span class="spacer"></span>
+  <span id="count" class="count"></span>
+  <button id="b-pause" type="button" title="Suspendre l'affichage">⏸ Pause</button>
+  <button id="b-clear" type="button" title="Vider l'historique">🗑 Vider</button>
+  <a class="btn" href="api/export?format=har" title="Exporter l'historique au format HAR (ouvrable dans les DevTools)">⤓ HAR</a>
+  <a class="btn" href="api/export?format=json" title="Exporter l'historique en JSON">⤓ JSON</a>
+</div>
+
+<main>
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th data-key="id" class="num">#</th>
+          <th data-key="started_at">Heure</th>
+          <th data-key="scheme">Type</th>
+          <th data-key="host">Host</th>
+          <th data-key="path">Méthode / chemin</th>
+          <th data-key="status" class="num">Statut</th>
+          <th data-key="route">Route</th>
+          <th data-key="total_ms" class="num">Durée</th>
+          <th data-key="bytes_down" class="num">Octets ↑ / ↓</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty" class="empty">Aucune requête pour l'instant. Essayez <code>curl -x http://127.0.0.1:8080 https://example.com/</code></div>
+  </div>
+  <aside id="detail" class="detail hidden">
+    <div class="detail-head">
+      <h2 id="d-title"></h2>
+      <button id="d-close" type="button" title="Fermer">✕</button>
+    </div>
+    <div id="d-body"></div>
+  </aside>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
