@@ -90,7 +90,7 @@ func TestMITM(t *testing.T) {
 		MITMHosts: []string{"example.com"},
 	}, srv)
 
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com:"+p+"/secret/path?x=1", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://example.com:"+p+"/slow/secret?x=1", nil)
 	req.Header.Set("Cookie", "session=42")
 	resp, err := c.Do(req)
 	if err != nil {
@@ -106,20 +106,20 @@ func TestMITM(t *testing.T) {
 		t.Errorf("client certificate issuer = %q", issuer)
 	}
 	// The backend still sees the original Host and SNI.
-	wantSeen(t, rec, "example.com:"+p+" /secret/path example.com")
+	wantSeen(t, rec, "example.com:"+p+" /slow/secret example.com")
 
 	evs := waitDone(t, col, 1)
 	if len(evs) != 1 {
 		t.Fatalf("events = %+v", evs)
 	}
 	e := evs[0]
-	if e.Scheme != collector.SchemeHTTPSMITM || e.Method != "GET" || e.Path != "/secret/path?x=1" || e.Status != 200 {
+	if e.Scheme != collector.SchemeHTTPSMITM || e.Method != "GET" || e.Path != "/slow/secret?x=1" || e.Status != 200 {
 		t.Errorf("event = %+v", e)
 	}
 	if e.Route != "override:127.0.0.1" {
 		t.Errorf("route = %q", e.Route)
 	}
-	if e.TLS <= 0 || e.Connect <= 0 || e.TTFB <= 0 {
+	if e.TLS <= 0 || e.Connect < 0 || e.TTFB < slowDelay {
 		t.Errorf("timings tls=%v connect=%v ttfb=%v", e.TLS, e.Connect, e.TTFB)
 	}
 	if e.ReqHeader.Get("Cookie") != "[masked]" {

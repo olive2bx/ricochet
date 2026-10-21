@@ -43,6 +43,9 @@ func (s *seen) all() []string {
 	return append([]string(nil), s.reqs...)
 }
 
+// slowDelay is the server think time of backend for paths starting with /slow.
+const slowDelay = 20 * time.Millisecond
+
 // backend answers with its name and records "host path sni".
 func backend(t *testing.T, name string, useTLS bool) (*httptest.Server, *seen) {
 	t.Helper()
@@ -53,6 +56,10 @@ func backend(t *testing.T, name string, useTLS bool) (*httptest.Server, *seen) {
 			sni = r.TLS.ServerName
 		}
 		rec.add(fmt.Sprintf("%s %s %s", r.Host, r.URL.Path, sni))
+		if strings.HasPrefix(r.URL.Path, "/slow") {
+			// Long enough to be measurable with any clock resolution.
+			time.Sleep(slowDelay)
+		}
 		io.WriteString(w, name)
 	})
 	var srv *httptest.Server
@@ -313,7 +320,7 @@ func TestEventsHTTP(t *testing.T) {
 	c := client(t, proxyURL, nil)
 
 	p := port(t, srv)
-	req, _ := http.NewRequest(http.MethodPost, "http://api.example.com:"+p+"/submit?q=1", strings.NewReader("hello=world"))
+	req, _ := http.NewRequest(http.MethodPost, "http://api.example.com:"+p+"/slow-submit?q=1", strings.NewReader("hello=world"))
 	req.Header.Set("Authorization", "Bearer s3cret")
 	req.Header.Set("X-Trace", "abc")
 	resp, err := c.Do(req)
@@ -324,7 +331,7 @@ func TestEventsHTTP(t *testing.T) {
 	resp.Body.Close()
 
 	e := waitDone(t, col, 1)[0]
-	if e.Scheme != collector.SchemeHTTP || e.Method != "POST" || e.Path != "/submit?q=1" || e.Status != 200 ||
+	if e.Scheme != collector.SchemeHTTP || e.Method != "POST" || e.Path != "/slow-submit?q=1" || e.Status != 200 ||
 		e.Host != "api.example.com" || p != strconv.Itoa(int(e.Port)) {
 		t.Errorf("event = %+v", e)
 	}
@@ -334,8 +341,10 @@ func TestEventsHTTP(t *testing.T) {
 	if e.BytesUp != int64(len("hello=world")) || e.BytesDown != int64(len("backend")) {
 		t.Errorf("bytes up/down = %d/%d", e.BytesUp, e.BytesDown)
 	}
-	if e.Total <= 0 || e.TTFB <= 0 || e.Connect <= 0 || e.TTFB > e.Total {
-		t.Errorf("timings total=%v ttfb=%v connect=%v", e.Total, e.TTFB, e.Connect)
+	// Loopback connects can measure 0 on coarse clocks (Windows): only the
+	// server think time is guaranteed to show.
+	if e.TTFB < slowDelay || e.Total < e.TTFB || e.Connect < 0 || e.Blocked < 0 {
+		t.Errorf("timings total=%v ttfb=%v connect=%v blocked=%v", e.Total, e.TTFB, e.Connect, e.Blocked)
 	}
 	if e.DNS != 0 {
 		t.Errorf("DNS = %v for an IP override", e.DNS)
@@ -374,7 +383,7 @@ func TestEventsTunnel(t *testing.T) {
 	if e.BytesUp < 100 || e.BytesDown < 100 {
 		t.Errorf("bytes up/down = %d/%d", e.BytesUp, e.BytesDown)
 	}
-	if e.Connect <= 0 || e.TTFB <= 0 || e.Total < e.TTFB {
+	if e.Connect < 0 || e.TTFB <= 0 || e.Total < e.TTFB {
 		t.Errorf("timings connect=%v ttfb=%v total=%v", e.Connect, e.TTFB, e.Total)
 	}
 	if e.Err != "" {

@@ -291,6 +291,10 @@ type tunnelConn struct {
 	once                sync.Once
 	ev                  collector.Event
 	closeWrite, closeRd func() error
+	// clientDone is set once the client finished sending (half-close). Errors
+	// after that, typically a reset from a server closing with unread data,
+	// are teardown noise rather than failures of the exchange.
+	clientDone atomic.Bool
 }
 
 func newTunnelConn(p *Proxy, c net.Conn, start time.Time, ev collector.Event) *tunnelConn {
@@ -311,7 +315,7 @@ func (t *tunnelConn) mark(first *atomic.Int64) {
 }
 
 func (t *tunnelConn) setErr(err error) {
-	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || t.clientDone.Load() {
 		return
 	}
 	t.errMu.Lock()
@@ -343,6 +347,7 @@ func (t *tunnelConn) Read(b []byte) (int, error) {
 
 // CloseWrite and CloseRead keep goproxy's half-close path available.
 func (t *tunnelConn) CloseWrite() error {
+	t.clientDone.Store(true)
 	if t.closeWrite != nil {
 		return t.closeWrite()
 	}
