@@ -150,6 +150,22 @@ Avec le MITM, la CA est créée dans le dossier d'installation (`ca/ca.pem`) et
 le résumé affiche la commande à utiliser (`curl --cacert …` ou
 `SSL_CERT_FILE=…`), y compris dans un autre terminal qui réutilise l'instance.
 
+**kubectl et Helm** (écrits en Go) lisent `HTTPS_PROXY`, mais pas
+`SSL_CERT_FILE` dès que la kubeconfig contient la CA du cluster
+(`certificate-authority-data`), et jamais sous Windows ni macOS. Sans MITM
+(mode tunnel par défaut), ils fonctionnent tels quels : le certificat reste
+celui du vrai API server. Pour déchiffrer leurs requêtes :
+
+```sh
+ricochet-on --restart --mitm-hosts 'mon-apiserver.exemple.com'
+kubectl --certificate-authority ~/.ricochet/ca/ca.pem get pods
+```
+
+Limite : en MITM, la connexion TLS s'arrête à ricochet, donc une
+authentification par **certificat client** (kubeadm, kind, minikube…) n'atteint
+pas l'API server (réponse 401). L'authentification par token (EKS, GKE, AKS,
+OIDC) fonctionne.
+
 Variables facultatives : `RICOCHET_PORT`, `RICOCHET_UI_PORT`, `RICOCHET_RULES`
 (chemin du fichier de règles), `RICOCHET_BIN`, `RICOCHET_ARGS` (options
 supplémentaires, ex. `--mitm-hosts '*.exemple.com'`). Le pid et les logs sont

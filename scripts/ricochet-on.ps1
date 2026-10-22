@@ -321,7 +321,11 @@ switch ($mitmScope) {
 }
 if ($mitmScope -and $status.ContainsKey('ca') -and $status.ca) {
     Write-Host "  CA        : $($status.ca)"
-    Write-Host "              curl --cacert `"$($status.ca)`" ...   ou   `$env:SSL_CERT_FILE = `"$($status.ca)`"" -ForegroundColor DarkGray
+    # SSL_CERT_FILE est ignoré par la plupart des outils sous Windows.
+    $curlHint = if ($onWindows) { "curl --cacert `"$($status.ca)`" ..." } else { "curl --cacert `"$($status.ca)`" ...   ou   `$env:SSL_CERT_FILE = `"$($status.ca)`"" }
+    Write-Host "              $curlHint" -ForegroundColor DarkGray
+    # kubectl/helm (Go) ignorent SSL_CERT_FILE dès que la kubeconfig fournit la CA du cluster.
+    Write-Host "              kubectl --certificate-authority `"$($status.ca)`" ...  (pas avec une auth par certificat client)" -ForegroundColor DarkGray
 }
 Write-Host "  logs      : $log"
 Write-Host "  arrêt     : & `"$(Join-Path $dir 'ricochet-off.ps1')`"" -ForegroundColor DarkGray

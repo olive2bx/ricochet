@@ -259,6 +259,8 @@ __ricochet_on() {
 	if [ -n "$mitm" ] && [ -n "$ca" ]; then
 		printf '  CA        : %s\n' "$ca"
 		printf '  %s            curl --cacert %s …   ou   export SSL_CERT_FILE=%s%s\n' "$c_dim" "$ca" "$ca" "$c_off"
+		# kubectl/helm (Go) ignorent SSL_CERT_FILE dès que la kubeconfig fournit la CA du cluster.
+		printf '  %s            kubectl --certificate-authority %s …  (pas avec une auth par certificat client)%s\n' "$c_dim" "$ca" "$c_off"
 	fi
 	printf '  logs      : %s\n' "$log"
 	printf '  %sarrêt     : . %s/ricochet-off.sh%s\n' "$c_dim" "$dir" "$c_off"
