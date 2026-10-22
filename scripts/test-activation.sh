@@ -42,7 +42,10 @@ gone() {
 		sleep 0.1
 	done
 }
-dir=$1
+# Chemin résolu (macOS : /var -> /private/var), comme le fait ricochet-on.
+dir=$(cd "$1" && pwd -P)
+# Sinon bash transmet les arguments de ce script à ricochet-on, sourcé sans arguments.
+set --
 export RICOCHET_PORT=39129 RICOCHET_UI_PORT=39130
 export http_proxy='http://alice:s3cret@127.0.0.1:9' https_proxy='http://alice:s3cret@127.0.0.1:9'
 unset HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
@@ -108,6 +111,26 @@ out=$(. "$dir/ricochet-on.sh" 2>&1) && fail "activation aurait dû échouer (por
 kill "$squatter"
 case $out in *'déjà utilisé par un autre programme'*) ;; *) fail "message port occupé absent: $out" ;; esac
 [ "$http_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "variables modifiées malgré l'échec"
+
+# Options : transmises à ricochet, CA dans le dossier d'installation.
+out=$(. "$dir/ricochet-on.sh" --listen 1.2.3.4:1 2>&1) && fail "--listen aurait dû être refusé"
+case $out in *'géré par le script'*) ;; *) fail "refus --listen: $out" ;; esac
+out=$(. "$dir/ricochet-on.sh" stray-value 2>&1) && fail "valeur seule acceptée"
+case $out in *'argument inattendu'*) ;; *) fail "refus valeur seule: $out" ;; esac
+. "$dir/ricochet-on.sh" --mitm-hosts '*.example.com' --capture-bodies=512 >/dev/null 2>&1 || fail "activation avec options"
+st=$("$dir/ricochet" --dashboard 127.0.0.1:39130 --ping) || fail "ping après activation avec options"
+case $st in *'mitm=*.example.com'*) ;; *) fail "mitm non transmis: $st" ;; esac
+case $st in *"ca=$dir/ca/ca.pem"*) ;; *) fail "CA hors du dossier d'installation: $st" ;; esac
+[ -f "$dir/ca/ca.pem" ] || fail "CA non créée"
+out=$(. "$dir/ricochet-on.sh" --mitm 2>&1) || fail "seconde activation avec options"
+case $out in *'options ignorées'*'--restart --mitm'*) ;; *) fail "avertissement options ignorées absent: $out" ;; esac
+first=$(cat "$dir/ricochet.pid")
+. "$dir/ricochet-on.sh" --restart --mitm >/dev/null 2>&1 || fail "--restart"
+[ "$(cat "$dir/ricochet.pid")" != "$first" ] || fail "--restart n'a pas relancé ricochet"
+st=$("$dir/ricochet" --dashboard 127.0.0.1:39130 --ping) || fail "ping après --restart"
+case $st in *'mitm=all'*) ;; *) fail "--restart n'a pas appliqué --mitm: $st" ;; esac
+. "$dir/ricochet-off.sh" >/dev/null
+[ "$http_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "restauration après --restart"
 echo "OK ($0)"
 EOF
 

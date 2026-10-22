@@ -99,6 +99,27 @@ try {
     } finally {
         Stop-Process -Id $squatter.Id -Force -ErrorAction SilentlyContinue
     }
+
+    # Options : paramètres natifs et options brutes, CA dans le dossier d'installation.
+    $on = Join-Path $tmp 'ricochet-on.ps1'
+    $out = & $on --listen 1.2.3.4:1 6>&1 | Out-String
+    if ($LASTEXITCODE -ne 2 -or $out -notmatch 'géré par le script') { Fail "refus --listen: $out" }
+    & $on -MitmHosts '*.example.com' --capture-bodies 512 6>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail 'activation avec options' }
+    $st = (& $bin --dashboard 127.0.0.1:39130 --ping) -join "`n"
+    if ($st -notmatch 'mitm=\*\.example\.com') { Fail "mitm non transmis: $st" }
+    $caPem = Join-Path (Join-Path $tmp 'ca') 'ca.pem'
+    if (-not (Test-Path $caPem)) { Fail 'CA non créée dans le dossier d''installation' }
+    $out = & $on -Mitm 6>&1 | Out-String
+    if ($out -notmatch 'options ignorées') { Fail "avertissement options ignorées absent: $out" }
+    $first = (Get-Content (Join-Path $tmp 'ricochet.pid') -Raw).Trim()
+    & $on -Restart -Mitm 6>&1 | Out-Null
+    if ((Get-Content (Join-Path $tmp 'ricochet.pid') -Raw).Trim() -eq $first) { Fail "-Restart n'a pas relancé ricochet" }
+    $st = (& $bin --dashboard 127.0.0.1:39130 --ping) -join "`n"
+    if ($st -notmatch 'mitm=all') { Fail "-Restart n'a pas appliqué -Mitm: $st" }
+    & (Join-Path $tmp 'ricochet-off.ps1') 6>&1 | Out-Null
+    if ($env:HTTPS_PROXY -ne $original) { Fail 'restauration après -Restart' }
+
     Write-Host 'OK (test-activation.ps1)'
     # Le dernier scénario attend un échec (code 1) : le runner CI termine par
     # « exit $LASTEXITCODE », qu'on remet donc à zéro.

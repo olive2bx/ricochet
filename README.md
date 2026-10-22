@@ -115,6 +115,57 @@ l'indique. Si le port est pris par un autre programme, le message le dit.
 L'arrêt passe par `ricochet --stop` (arrêt propre, y compris sous Windows) et
 coupe ricochet pour tous les terminaux.
 
+### Options d'activation (MITM, corps, …)
+
+Les options de ricochet se passent directement au script :
+
+```sh
+ricochet-on --mitm-hosts '*.exemple.com'             # alias bash/zsh
+ricochet-on --mitm --capture-bodies 4096
+ricochet-on --restart --mitm                         # relance pour appliquer
+ricochet-on --help
+```
+
+```powershell
+& "$HOME\.ricochet\ricochet-on.ps1" -MitmHosts '*.exemple.com' -CaptureBodies 4096
+& "$HOME\.ricochet\ricochet-on.ps1" -Restart -Mitm --verbose   # options brutes acceptées aussi
+Get-Help "$HOME\.ricochet\ricochet-on.ps1" -Detailed
+```
+
+| Script | PowerShell | Effet |
+|---|---|---|
+| `--restart` | `-Restart` | relance ricochet s'il tourne déjà (sinon les nouvelles options sont ignorées, avec un avertissement) |
+| `--mitm` | `-Mitm` | déchiffre tout le HTTPS |
+| `--mitm-hosts H,…` | `-MitmHosts H,…` | déchiffre seulement ces hosts |
+| `--capture-bodies N` | `-CaptureBodies N` | conserve jusqu'à N octets des corps |
+| `--bypass H,…` | `-Bypass H,…` | hosts qui ne passent pas par l'amont |
+| `--no-keepalive` | `-NoKeepAlive` | timings DNS/connexion/TLS à chaque requête |
+| toute autre option de ricochet | idem (ex. `--verbose`) | transmise telle quelle |
+
+`--listen`, `--dashboard`, `--rules` et `--upstream` sont gérés par le script
+(variables ci-dessous) et refusés ; `--upstream-auth` aussi, car il serait
+visible dans la liste des processus.
+
+Avec le MITM, la CA est créée dans le dossier d'installation (`ca/ca.pem`) et
+le résumé affiche la commande à utiliser (`curl --cacert …` ou
+`SSL_CERT_FILE=…`), y compris dans un autre terminal qui réutilise l'instance.
+
+**kubectl et Helm** (écrits en Go) lisent `HTTPS_PROXY`, mais pas
+`SSL_CERT_FILE` dès que la kubeconfig contient la CA du cluster
+(`certificate-authority-data`), et jamais sous Windows ni macOS. Sans MITM
+(mode tunnel par défaut), ils fonctionnent tels quels : le certificat reste
+celui du vrai API server. Pour déchiffrer leurs requêtes :
+
+```sh
+ricochet-on --restart --mitm-hosts 'mon-apiserver.exemple.com'
+kubectl --certificate-authority ~/.ricochet/ca/ca.pem get pods
+```
+
+Limite : en MITM, la connexion TLS s'arrête à ricochet, donc une
+authentification par **certificat client** (kubeadm, kind, minikube…) n'atteint
+pas l'API server (réponse 401). L'authentification par token (EKS, GKE, AKS,
+OIDC) fonctionne.
+
 Variables facultatives : `RICOCHET_PORT`, `RICOCHET_UI_PORT`, `RICOCHET_RULES`
 (chemin du fichier de règles), `RICOCHET_BIN`, `RICOCHET_ARGS` (options
 supplémentaires, ex. `--mitm-hosts '*.exemple.com'`). Le pid et les logs sont
@@ -149,7 +200,7 @@ uniquement).
 | `--no-keepalive` | `false` | pas de réutilisation de connexion : DNS/connexion/TLS mesurés à chaque requête |
 | `--verbose` | `false` | logs détaillés (décision de routage par requête) |
 | `--version` | | affiche la version |
-| `--ping` | | indique si un ricochet répond sur `--dashboard` (code 0, affiche `pid=…`, `upstream=…`) ou non (code 1) |
+| `--ping` | | indique si un ricochet répond sur `--dashboard` (code 0, affiche `pid=…`, `upstream=…`, `mitm=…`, `ca=…`) ou non (code 1) |
 | `--stop` | | arrête proprement le ricochet dont le dashboard est `--dashboard` (code 0) ; code 1 s'il ne tourne pas |
 
 Les credentials amont ne sont jamais affichés : ni dans les logs, ni dans le
@@ -261,7 +312,7 @@ le détail) ; `--no-keepalive` force des connexions neuves.
 | `GET /api/requests/{id}` | un événement complet (avec corps) |
 | `GET /events` | flux SSE (`event: event` / `event: clear`) |
 | `GET /api/rules` | règles actives, date de chargement, dernière erreur |
-| `GET /api/status` | identifie l'instance : `app`, `pid`, `version`, `proxy`, `upstream` |
+| `GET /api/status` | identifie l'instance : `app`, `pid`, `version`, `proxy`, `upstream`, `mitm`, `ca` |
 | `POST /api/shutdown` | arrêt propre ; exige le header `X-Ricochet-Control: 1` (impossible depuis une page web) |
 | `GET /api/export?format=har\|json` | export de l'historique |
 | `POST /api/clear` | vide l'historique (mémoire et SQLite) |
