@@ -42,7 +42,8 @@ gone() {
 		sleep 0.1
 	done
 }
-dir=$1
+# Chemin résolu (macOS : /var -> /private/var), comme le fait ricochet-on.
+dir=$(cd "$1" && pwd -P)
 # Sinon bash transmet les arguments de ce script à ricochet-on, sourcé sans arguments.
 set --
 export RICOCHET_PORT=39129 RICOCHET_UI_PORT=39130
