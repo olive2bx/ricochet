@@ -363,8 +363,36 @@ func TestEventsHTTP(t *testing.T) {
 	}
 }
 
+// slowListener delays the first write on each accepted connection, so that
+// the tunnel TTFB is measurable with any clock resolution (on Windows a
+// loopback ServerHello can arrive within the same clock tick).
+type slowListener struct{ net.Listener }
+
+func (l slowListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &slowConn{Conn: c}, nil
+}
+
+type slowConn struct {
+	net.Conn
+	once sync.Once
+}
+
+func (c *slowConn) Write(b []byte) (int, error) {
+	c.once.Do(func() { time.Sleep(slowDelay) })
+	return c.Conn.Write(b)
+}
+
 func TestEventsTunnel(t *testing.T) {
-	srv, _ := backend(t, "tls-backend", true)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "tls-backend")
+	}))
+	srv.Listener = slowListener{srv.Listener}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
 	col := collector.New(10)
 	proxyURL := startProxy(t, Config{Rules: mustRules(t, "127.0.0.1 example.com\n"), Collector: col})
 	c := client(t, proxyURL, srv)
@@ -383,7 +411,7 @@ func TestEventsTunnel(t *testing.T) {
 	if e.BytesUp < 100 || e.BytesDown < 100 {
 		t.Errorf("bytes up/down = %d/%d", e.BytesUp, e.BytesDown)
 	}
-	if e.Connect < 0 || e.TTFB <= 0 || e.Total < e.TTFB {
+	if e.Connect < 0 || e.TTFB < slowDelay || e.Total < e.TTFB {
 		t.Errorf("timings connect=%v ttfb=%v total=%v", e.Connect, e.TTFB, e.Total)
 	}
 	if e.Err != "" {

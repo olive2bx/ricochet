@@ -153,3 +153,32 @@ func (c *certCache) Fetch(host string, gen func() (*tls.Certificate, error)) (*t
 	c.certs[host] = cert
 	return cert, nil
 }
+
+// ServerTLSConfig returns the TLS configuration used towards servers for
+// MITM'd requests: the system roots plus the PEM certificates of caFiles
+// (e.g. the internal CA of a Kubernetes cluster). insecure disables server
+// certificate verification altogether. It returns nil when neither is set.
+func ServerTLSConfig(caFiles []string, insecure bool) (*tls.Config, error) {
+	if len(caFiles) == 0 && !insecure {
+		return nil, nil
+	}
+	cfg := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // explicit opt-in (--upstream-insecure)
+	if len(caFiles) == 0 {
+		return cfg, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	for _, f := range caFiles {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("read server CA: %w", err)
+		}
+		if !pool.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("server CA %s: no PEM certificate found", f)
+		}
+	}
+	cfg.RootCAs = pool
+	return cfg, nil
+}

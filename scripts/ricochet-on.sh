@@ -33,7 +33,7 @@ fi
 __ricochet_on() {
 	if [ -n "${ZSH_VERSION:-}" ]; then setopt local_options sh_word_split; fi
 	local dir bin port ui_port rules pidfile log proxy_url upstream pid v val i
-	local ping_out run_up shown_up restart='' has_ca='' a name user_args='' mitm ca expect_value=
+	local ping_out run_up shown_up restart='' has_ca='' a name user_args='' mitm ca expect_value='' path_value=''
 	local -a extra
 	extra=()
 	local c_ok='' c_warn='' c_err='' c_dim='' c_off=''
@@ -52,6 +52,7 @@ __ricochet_on() {
 		if [ -n "$expect_value" ]; then
 			# Valeur de l'option précédente (ex. --mitm-hosts '*.exemple.com').
 			expect_value=''
+			[ -z "$path_value" ] || a=$(__ricochet_native_list "$a")
 			extra+=("$a")
 			user_args="$user_args $a"
 			continue
@@ -91,8 +92,16 @@ __ricochet_on() {
 		# Options booléennes de ricochet ; les autres attendent une valeur, sauf
 		# si elle est donnée avec « = ».
 		case $name in
-		mitm | no-keepalive | verbose | version) ;;
+		mitm | no-keepalive | verbose | version | upstream-insecure) ;;
 		*) case $a in *=*) ;; *) expect_value=1 ;; esac ;;
+		esac
+		# Options qui prennent des chemins (convertis pour ricochet.exe).
+		case $name in
+		ca-dir | upstream-ca | db)
+			path_value=1
+			case $a in *=*) a="${a%%=*}=$(__ricochet_native_list "${a#*=}")" ;; esac
+			;;
+		*) path_value='' ;;
 		esac
 		extra+=("$a")
 		user_args="$user_args $a"
@@ -103,7 +112,7 @@ __ricochet_on() {
 	fi
 	# La CA du MITM reste dans le dossier d'installation (et non dans le
 	# dossier courant, défaut de ricochet).
-	[ -n "$has_ca" ] || extra+=(--ca-dir "$dir/ca")
+	[ -n "$has_ca" ] || extra+=(--ca-dir "$(__ricochet_native "$dir/ca")")
 
 	if [ -n "${RICOCHET_BIN:-}" ]; then
 		bin=$RICOCHET_BIN
@@ -208,7 +217,7 @@ __ricochet_on() {
 		# shellcheck disable=SC2086 # RICOCHET_ARGS est volontairement découpé
 		(RICOCHET_UPSTREAM=$upstream nohup "$bin" \
 			--listen "127.0.0.1:$port" --dashboard "127.0.0.1:$ui_port" \
-			--rules "$rules" "${extra[@]}" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
+			--rules "$(__ricochet_native "$rules")" "${extra[@]}" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
 		echo $! >"$pidfile")
 		pid=$(cat "$pidfile")
 
@@ -284,6 +293,9 @@ Options transmises à ricochet (exemples) :
   --capture-bodies N     conserve jusqu'à N octets des corps (HTTP clair et MITM)
   --bypass H,...         hosts qui ne passent pas par l'amont
   --no-keepalive         connexions neuves (timings DNS/connexion/TLS à chaque requête)
+  --upstream-ca F,...    CA supplémentaires pour les serveurs déchiffrés (ex. CA
+                         interne d'un cluster Kubernetes)
+  --upstream-insecure    MITM sans vérifier les certificats serveurs (debug)
   --mask-headers H,...   headers masqués dans le dashboard ("" : aucun)
   --verbose              logs détaillés
   --db FICHIER           historique persistant (binaire compilé avec SQLite)
@@ -321,6 +333,24 @@ __ricochet_redact() {
 	printf '%s' "$1" | sed -E 's#(://)[^/@]*@#\1***@#'
 }
 
+# Chemin compris par le binaire : sous Git Bash / MSYS2 / Cygwin, ricochet.exe
+# ne connaît pas /c/Users/... et la conversion automatique de MSYS est souvent
+# désactivée (MSYS_NO_PATHCONV=1, pour docker ou kubectl).
+__ricochet_native() {
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -m "$1"
+	else
+		printf '%s\n' "$1"
+	fi
+}
+
+# __ricochet_native_list "a,b" : idem pour une liste séparée par des virgules.
+__ricochet_native_list() {
+	local IFS=, out='' f
+	for f in $1; do out="$out${out:+,}$(__ricochet_native "$f")"; done
+	printf '%s\n' "$out"
+}
+
 __ricochet_rules_template() {
 	cat <<'EOF'
 # Règles ricochet : FQDN → IP (rechargées à chaud, sans redémarrer).
@@ -337,6 +367,6 @@ EOF
 
 __ricochet_on "$__rc_src" "$@"
 __rc_status=$?
-unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template __ricochet_help
+unset -f __ricochet_on __ricochet_native __ricochet_native_list __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template __ricochet_help
 unset __rc_src __rc_sourced
 eval "unset __rc_status; return $__rc_status"

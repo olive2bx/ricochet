@@ -3,6 +3,7 @@ package proxy
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/url"
@@ -63,7 +64,9 @@ func mitmSetup(t *testing.T, cfg Config, tlsBackend interface{ Certificate() *x5
 	col := collector.New(20)
 	cfg.CA = ca
 	cfg.Collector = col
-	cfg.TLSClientConfig = &tls.Config{RootCAs: backendPool}
+	if cfg.TLSClientConfig == nil {
+		cfg.TLSClientConfig = &tls.Config{RootCAs: backendPool}
+	}
 	proxyURL := startProxy(t, cfg)
 
 	pem, err := os.ReadFile(certPath)
@@ -170,5 +173,66 @@ func TestMITMThroughUpstream(t *testing.T) {
 func TestMITMRequiresCA(t *testing.T) {
 	if _, err := New(Config{MITM: true}); err == nil {
 		t.Error("New with MITM and no CA succeeded")
+	}
+}
+
+// A server with a private CA (e.g. a Kubernetes API server) is rejected
+// unless its CA is given (--upstream-ca) or verification is off.
+func TestMITMServerCA(t *testing.T) {
+	srv, _ := backend(t, "tls-backend", true)
+	caFile := filepath.Join(t.TempDir(), "server-ca.pem")
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caFile, pemData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withCA, err := ServerTLSConfig([]string{caFile}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insecure, err := ServerTLSConfig(nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		tls  *tls.Config
+		ok   bool
+	}{
+		{"system roots only", &tls.Config{}, false},
+		{"upstream-ca", withCA, true},
+		{"upstream-insecure", insecure, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := mitmSetup(t, Config{
+				Rules:           mustRules(t, "127.0.0.1 example.com\n"),
+				MITM:            true,
+				TLSClientConfig: tt.tls,
+			}, srv)
+			resp, err := c.Get("https://example.com:" + port(t, srv) + "/")
+			ok := err == nil && resp.StatusCode == http.StatusOK
+			if err == nil {
+				resp.Body.Close()
+			}
+			if ok != tt.ok {
+				t.Errorf("ok = %v (err=%v), want %v", ok, err, tt.ok)
+			}
+		})
+	}
+}
+
+func TestServerTLSConfig(t *testing.T) {
+	if cfg, err := ServerTLSConfig(nil, false); cfg != nil || err != nil {
+		t.Errorf("default = %v, %v; want nil, nil", cfg, err)
+	}
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.pem")
+	if err := os.WriteFile(bad, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{bad, filepath.Join(dir, "missing.pem")} {
+		if _, err := ServerTLSConfig([]string{f}, false); err == nil {
+			t.Errorf("%s: expected an error", f)
+		}
 	}
 }
