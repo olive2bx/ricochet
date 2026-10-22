@@ -39,6 +39,8 @@ type options struct {
 	mitm         bool
 	mitmHosts    string
 	caDir        string
+	serverCA     string
+	insecure     bool
 	maskHeaders  string
 	captureBody  int
 	dbPath       string
@@ -62,6 +64,8 @@ func main() {
 	flag.BoolVar(&o.mitm, "mitm", false, "decrypt (MITM) every HTTPS connection")
 	flag.StringVar(&o.mitmHosts, "mitm-hosts", "", "comma-separated hosts to decrypt, e.g. *.example.com,api.foo.com")
 	flag.StringVar(&o.caDir, "ca-dir", "./.ricochet-ca", "directory of the local MITM CA (created on first use)")
+	flag.StringVar(&o.serverCA, "upstream-ca", "", "comma-separated PEM files of extra CAs trusted for MITM'd servers (e.g. a Kubernetes cluster CA)")
+	flag.BoolVar(&o.insecure, "upstream-insecure", false, "MITM: do not verify server certificates (debugging only)")
 	flag.StringVar(&o.maskHeaders, "mask-headers", strings.Join(proxy.DefaultMaskedHeaders, ","), `headers whose values are hidden in the dashboard ("" to show everything)`)
 	flag.IntVar(&o.captureBody, "capture-bodies", 0, "store up to N bytes of each request/response body (plain HTTP and MITM; 0 = off)")
 	flag.StringVar(&o.dbPath, "db", "", "SQLite file for a persistent history (binary built with -tags sqlite)")
@@ -170,6 +174,14 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		mask = []string{}
 	}
 
+	serverTLS, err := proxy.ServerTLSConfig(splitList(o.serverCA), o.insecure)
+	if err != nil {
+		return err
+	}
+	if o.insecure {
+		logger.Warn("MITM: server certificates are NOT verified (--upstream-insecure)")
+	}
+
 	p, err := proxy.New(proxy.Config{
 		Rules:         store,
 		Upstream:      upstream,
@@ -183,6 +195,8 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		MITM:          o.mitm,
 		MITMHosts:     mitmHosts,
 		CaptureBodies: o.captureBody,
+
+		TLSClientConfig: serverTLS,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy: %w", err)
@@ -265,6 +279,12 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 			info["mitm"] = "tous les hosts"
 		case len(mitmHosts) > 0:
 			info["mitm"] = strings.Join(mitmHosts, ",")
+		}
+		switch {
+		case o.insecure:
+			info["certificats serveurs"] = "NON vérifiés (--upstream-insecure)"
+		case o.serverCA != "":
+			info["certificats serveurs"] = "système + " + o.serverCA
 		}
 		dash = &http.Server{
 			Handler: dashboard.New(dashboard.Options{

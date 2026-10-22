@@ -157,9 +157,23 @@ le résumé affiche la commande à utiliser (`curl --cacert …` ou
 celui du vrai API server. Pour déchiffrer leurs requêtes :
 
 ```sh
-ricochet-on --restart --mitm-hosts 'mon-apiserver.exemple.com'
+# CA interne du cluster, pour que ricochet fasse confiance à l'API server
+kubectl config view --raw --minify \
+  -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
+  | base64 -d > ~/.ricochet/cluster-ca.pem
+ricochet-on --restart --mitm-hosts 'mon-apiserver.exemple.com' \
+  --upstream-ca ~/.ricochet/cluster-ca.pem
 kubectl --certificate-authority ~/.ricochet/ca/ca.pem get pods
 ```
+
+Deux CA interviennent : `--certificate-authority` fait accepter à kubectl le
+certificat présenté par ricochet, et `--upstream-ca` fait accepter à ricochet
+celui de l'API server, signé par la CA interne du cluster. Sans
+`--upstream-ca`, ricochet refuse l'API server (`x509: certificate signed by
+unknown authority` dans le dashboard) et kubectl voit la connexion se fermer.
+Pour un diagnostic rapide, `--upstream-insecure` désactive cette vérification
+(à éviter hors debug ; kubectl peut alors utiliser
+`--insecure-skip-tls-verify`).
 
 Limite : en MITM, la connexion TLS s'arrête à ricochet, donc une
 authentification par **certificat client** (kubeadm, kind, minikube…) n'atteint
@@ -192,6 +206,8 @@ uniquement).
 | `--mitm` | `false` | déchiffre toutes les connexions HTTPS |
 | `--mitm-hosts` | | déchiffre seulement ces hosts : `*.exemple.com,api.foo.com` |
 | `--ca-dir` | `./.ricochet-ca` | dossier de la CA MITM (créée au premier lancement) |
+| `--upstream-ca` | | MITM : CA supplémentaires (PEM, séparées par des virgules) pour vérifier les serveurs, ex. la CA interne d'un cluster Kubernetes |
+| `--upstream-insecure` | `false` | MITM : ne vérifie pas les certificats des serveurs (debug uniquement) |
 | `--mask-headers` | `Authorization,Proxy-Authorization,Cookie,Set-Cookie` | headers masqués dans le dashboard (`""` = rien) |
 | `--capture-bodies` | `0` | conserve jusqu'à N octets de chaque corps (HTTP clair et MITM) |
 | `--history` | `5000` | taille de l'historique en mémoire |

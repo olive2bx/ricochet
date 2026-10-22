@@ -137,7 +137,9 @@ case $st in *'mitm=all'*) ;; *) fail "--restart n'a pas appliqué --mitm: $st" ;
 mkdir "$dir/fakebin"
 printf '#!/bin/sh\necho "$2" >>"%s/cygpath.log"\necho "$2"\n' "$dir" >"$dir/fakebin/cygpath"
 chmod +x "$dir/fakebin/cygpath"
-PATH="$dir/fakebin:$PATH" . "$dir/ricochet-on.sh" >/dev/null 2>&1 || fail "activation avec cygpath"
+PATH="$dir/fakebin:$PATH" . "$dir/ricochet-on.sh" --mitm --upstream-insecure \
+	--upstream-ca "$dir/ca/ca.pem" >/dev/null 2>&1 || fail "activation avec cygpath"
+grep -qx "$dir/ca/ca.pem" "$dir/cygpath.log" || fail "--upstream-ca non converti par cygpath"
 grep -qx "$dir/ricochet-rules.txt" "$dir/cygpath.log" || fail "règles non converties par cygpath"
 grep -qx "$dir/ca" "$dir/cygpath.log" || fail "CA non convertie par cygpath"
 type __ricochet_native >/dev/null 2>&1 && fail "fonction interne non nettoyée"
