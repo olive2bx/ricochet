@@ -26,6 +26,8 @@ type instance struct {
 	Version  string `json:"version"`
 	Proxy    string `json:"proxy"`
 	Upstream string `json:"upstream"`
+	MITM     string `json:"mitm"` // "all", a host list, or "" when off
+	CA       string `json:"ca"`   // absolute path of the MITM CA certificate
 }
 
 var errNotRunning = errors.New("no ricochet dashboard answering")
@@ -57,7 +59,8 @@ func cmdPing(addr string, out io.Writer) int {
 	if err != nil {
 		return ctlNotRunning
 	}
-	fmt.Fprintf(out, "pid=%d\nversion=%s\nproxy=%s\nupstream=%s\n", in.PID, in.Version, in.Proxy, in.Upstream)
+	fmt.Fprintf(out, "pid=%d\nversion=%s\nproxy=%s\nupstream=%s\nmitm=%s\nca=%s\n",
+		in.PID, in.Version, in.Proxy, in.Upstream, in.MITM, in.CA)
 	return ctlOK
 }
 

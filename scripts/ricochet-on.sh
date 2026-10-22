@@ -5,7 +5,9 @@
 # Le proxy configuré avant l'activation devient le proxy amont de ricochet.
 #
 # À SOURCER (bash ou zsh) pour modifier les variables du shell courant :
-#   . ~/.ricochet/ricochet-on.sh
+#   . ~/.ricochet/ricochet-on.sh [--restart] [options de ricochet...]
+#   . ~/.ricochet/ricochet-on.sh --mitm-hosts '*.exemple.com'
+#   . ~/.ricochet/ricochet-on.sh --help
 #
 # Variables optionnelles :
 #   RICOCHET_PORT     port du proxy        (3129)
@@ -31,7 +33,9 @@ fi
 __ricochet_on() {
 	if [ -n "${ZSH_VERSION:-}" ]; then setopt local_options sh_word_split; fi
 	local dir bin port ui_port rules pidfile log proxy_url upstream pid v val i
-	local ping_out run_up shown_up
+	local ping_out run_up shown_up restart='' has_ca='' a name user_args='' mitm ca expect_value=
+	local -a extra
+	extra=()
 	local c_ok='' c_warn='' c_err='' c_dim='' c_off=''
 	if [ -t 1 ]; then
 		c_ok=$(printf '\033[32m') c_warn=$(printf '\033[33m') c_err=$(printf '\033[31m')
@@ -39,6 +43,68 @@ __ricochet_on() {
 	fi
 
 	dir=$(cd "$(dirname "$1")" && pwd -P) || return 1
+	shift
+
+	# Options : celles du script, puis celles transmises à ricochet.
+	while [ $# -gt 0 ]; do
+		a=$1
+		shift
+		if [ -n "$expect_value" ]; then
+			# Valeur de l'option précédente (ex. --mitm-hosts '*.exemple.com').
+			expect_value=''
+			extra+=("$a")
+			user_args="$user_args $a"
+			continue
+		fi
+		case $a in
+		-*)
+			name=${a#-}
+			name=${name#-}
+			name=${name%%=*}
+			;;
+		*)
+			# Une valeur seule : faute de frappe, ou arguments hérités d'un script
+			# appelant qui source ricochet-on sans arguments (bash).
+			printf '%s✖ argument inattendu : %s (voir --help)%s\n' "$c_err" "$a" "$c_off" >&2
+			return 2
+			;;
+		esac
+		case $name in
+		h | help)
+			__ricochet_help "$dir"
+			return 0
+			;;
+		restart)
+			restart=1
+			continue
+			;;
+		listen | dashboard | rules | upstream)
+			printf '%s✖ %s est géré par le script : utilisez RICOCHET_PORT, RICOCHET_UI_PORT,\n  RICOCHET_RULES ou la variable https_proxy (amont) avant ricochet-on.%s\n' "$c_err" "$a" "$c_off" >&2
+			return 2
+			;;
+		upstream-auth)
+			printf '%s✖ --upstream-auth apparaîtrait dans la liste des processus : utilisez\n  https_proxy=http://user:pass@hôte:port ou RICOCHET_UPSTREAM_AUTH.%s\n' "$c_err" "$c_off" >&2
+			return 2
+			;;
+		ca-dir) has_ca=1 ;;
+		esac
+		# Options booléennes de ricochet ; les autres attendent une valeur, sauf
+		# si elle est donnée avec « = ».
+		case $name in
+		mitm | no-keepalive | verbose | version) ;;
+		*) case $a in *=*) ;; *) expect_value=1 ;; esac ;;
+		esac
+		extra+=("$a")
+		user_args="$user_args $a"
+	done
+	if [ -n "$expect_value" ]; then
+		printf '%s✖ valeur manquante pour %s (voir --help)%s\n' "$c_err" "$a" "$c_off" >&2
+		return 2
+	fi
+	# La CA du MITM reste dans le dossier d'installation (et non dans le
+	# dossier courant, défaut de ricochet).
+	[ -n "$has_ca" ] || extra+=(--ca-dir "$dir/ca")
+
 	if [ -n "${RICOCHET_BIN:-}" ]; then
 		bin=$RICOCHET_BIN
 	elif [ -f "$dir/ricochet.exe" ] && [ ! -f "$dir/ricochet" ]; then
@@ -93,6 +159,22 @@ __ricochet_on() {
 	# le terminal (bash, zsh, Git Bash, PowerShell) ou la façon de la lancer.
 	shown_up=$(__ricochet_hostport "$upstream")
 	ping_out=$("$bin" --dashboard "127.0.0.1:$ui_port" --ping 2>/dev/null)
+	if [ -n "$restart" ] && { [ -n "$ping_out" ] || __ricochet_running "$pidfile"; }; then
+		# --restart : arrêt de l'instance en cours pour appliquer les options.
+		pid=$(printf '%s\n' "$ping_out" | sed -n 's/^pid=//p')
+		if ! "$bin" --dashboard "127.0.0.1:$ui_port" --stop >/dev/null 2>&1 && __ricochet_running "$pidfile"; then
+			pid=$(cat "$pidfile")
+			kill "$pid" 2>/dev/null
+			i=0
+			while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
+				sleep 0.1
+				i=$((i + 1))
+			done
+		fi
+		printf '%s■ ricochet arrêté (pid %s) pour redémarrer avec les nouvelles options%s\n' "$c_ok" "${pid:-?}" "$c_off"
+		ping_out=''
+		rm -f "$pidfile"
+	fi
 	if [ -n "$ping_out" ]; then
 		pid=$(printf '%s\n' "$ping_out" | sed -n 's/^pid=//p')
 		run_up=$(printf '%s\n' "$ping_out" | sed -n 's/^upstream=//p')
@@ -104,7 +186,11 @@ __ricochet_on() {
 		if [ "$run_up" != "$shown_up" ]; then
 			printf '%s! l'"'"'instance en cours utilise l'"'"'amont « %s » et non « %s » ;%s\n' \
 				"$c_warn" "${run_up:-aucun}" "${shown_up:-aucun}" "$c_off"
-			printf '%s  pour changer : ricochet-off puis ricochet-on%s\n' "$c_warn" "$c_off"
+			printf '%s  pour changer : ricochet-on --restart%s\n' "$c_warn" "$c_off"
+		fi
+		if [ -n "$user_args" ]; then
+			printf '%s! options ignorées, ricochet tourne déjà :%s%s\n' "$c_warn" "$user_args" "$c_off"
+			printf '%s  pour les appliquer : ricochet-on --restart%s%s\n' "$c_warn" "$user_args" "$c_off"
 		fi
 		shown_up=$run_up
 	elif __ricochet_running "$pidfile"; then
@@ -122,7 +208,7 @@ __ricochet_on() {
 		# shellcheck disable=SC2086 # RICOCHET_ARGS est volontairement découpé
 		(RICOCHET_UPSTREAM=$upstream nohup "$bin" \
 			--listen "127.0.0.1:$port" --dashboard "127.0.0.1:$ui_port" \
-			--rules "$rules" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
+			--rules "$rules" "${extra[@]}" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
 		echo $! >"$pidfile")
 		pid=$(cat "$pidfile")
 
@@ -161,8 +247,50 @@ __ricochet_on() {
 		printf '  amont     : aucun (connexions directes)\n'
 	fi
 	printf '  règles    : %s%s\n' "$rules" "${val:+ ($val règle(s))}"
+	# État MITM de l'instance (lancée ici ou ailleurs).
+	ping_out=$("$bin" --dashboard "127.0.0.1:$ui_port" --ping 2>/dev/null)
+	mitm=$(printf '%s\n' "$ping_out" | sed -n 's/^mitm=//p')
+	ca=$(printf '%s\n' "$ping_out" | sed -n 's/^ca=//p')
+	case $mitm in
+	'') printf '  mitm      : désactivé %s(ricochet-on --restart --mitm ou --mitm-hosts …)%s\n' "$c_dim" "$c_off" ;;
+	all) printf '  mitm      : %stous les hosts%s\n' "$c_warn" "$c_off" ;;
+	*) printf '  mitm      : %s%s%s\n' "$c_warn" "$mitm" "$c_off" ;;
+	esac
+	if [ -n "$mitm" ] && [ -n "$ca" ]; then
+		printf '  CA        : %s\n' "$ca"
+		printf '  %s            curl --cacert %s …   ou   export SSL_CERT_FILE=%s%s\n' "$c_dim" "$ca" "$ca" "$c_off"
+	fi
 	printf '  logs      : %s\n' "$log"
 	printf '  %sarrêt     : . %s/ricochet-off.sh%s\n' "$c_dim" "$dir" "$c_off"
+}
+
+__ricochet_help() {
+	cat <<HELP
+Usage : . $1/ricochet-on.sh [--restart] [options de ricochet...]
+
+Démarre ricochet en arrière-plan (proxy 127.0.0.1:${RICOCHET_PORT:-3129},
+dashboard 127.0.0.1:${RICOCHET_UI_PORT:-3130}) avec le proxy actuel comme amont,
+puis fait pointer http_proxy / https_proxy sur lui.
+
+Options du script :
+  --restart              relance ricochet s'il tourne déjà (pour changer d'options)
+  -h, --help             cette aide
+
+Options transmises à ricochet (exemples) :
+  --mitm                 déchiffre tout le HTTPS (CA : $1/ca/ca.pem)
+  --mitm-hosts H,...     déchiffre seulement ces hosts (ex. '*.exemple.com')
+  --capture-bodies N     conserve jusqu'à N octets des corps (HTTP clair et MITM)
+  --bypass H,...         hosts qui ne passent pas par l'amont
+  --no-keepalive         connexions neuves (timings DNS/connexion/TLS à chaque requête)
+  --mask-headers H,...   headers masqués dans le dashboard ("" : aucun)
+  --verbose              logs détaillés
+  --db FICHIER           historique persistant (binaire compilé avec SQLite)
+Liste complète : $1/ricochet --help
+
+Exemples :
+  . $1/ricochet-on.sh --mitm-hosts '*.exemple.com'
+  . $1/ricochet-on.sh --restart --mitm --capture-bodies 4096
+HELP
 }
 
 # __ricochet_running PIDFILE : vrai si le processus du fichier tourne encore.
@@ -205,8 +333,8 @@ __ricochet_rules_template() {
 EOF
 }
 
-__ricochet_on "$__rc_src"
+__ricochet_on "$__rc_src" "$@"
 __rc_status=$?
-unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template
+unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template __ricochet_help
 unset __rc_src __rc_sourced
 eval "unset __rc_status; return $__rc_status"

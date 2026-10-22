@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -150,9 +151,19 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("MITM CA: %w", err)
 		}
+		if abs, err := filepath.Abs(caPath); err == nil {
+			caPath = abs
+		}
 		if created {
 			logger.Info("generated a new local MITM CA (not installed anywhere)", "cert", caPath)
 		}
+	}
+	mitmScope := ""
+	switch {
+	case o.mitm:
+		mitmScope = "all"
+	case len(mitmHosts) > 0:
+		mitmScope = strings.Join(mitmHosts, ",")
 	}
 	mask := splitList(o.maskHeaders)
 	if mask == nil {
@@ -263,8 +274,11 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 				Logger:       logger,
 				AllowedHosts: allowed,
 				Version:      version,
-				Status:       map[string]any{"proxy": ln.Addr().String(), "upstream": upstreamDesc},
-				Shutdown:     shutdown,
+				Status: map[string]any{
+					"proxy": ln.Addr().String(), "upstream": upstreamDesc,
+					"mitm": mitmScope, "ca": caPath,
+				},
+				Shutdown: shutdown,
 			}),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),

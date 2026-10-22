@@ -14,11 +14,48 @@
       RICOCHET_BIN      binaire ricochet     (<dossier du script>\ricochet.exe)
       RICOCHET_ARGS     options supplémentaires (ex. "--mitm-hosts *.exemple.com")
 
+.PARAMETER Restart
+    Relance ricochet s'il tourne déjà, pour appliquer de nouvelles options.
+
+.PARAMETER Mitm
+    Déchiffre tout le HTTPS (CA dans <dossier du script>\ca\ca.pem).
+
+.PARAMETER MitmHosts
+    Déchiffre seulement ces hosts (ex. '*.exemple.com', 'api.foo.com').
+
+.PARAMETER CaptureBodies
+    Conserve jusqu'à N octets des corps de requêtes et réponses.
+
+.PARAMETER Bypass
+    Hosts qui ne passent pas par le proxy amont.
+
+.PARAMETER NoKeepAlive
+    Connexions neuves : timings DNS / connexion / TLS à chaque requête.
+
+.PARAMETER RicochetArgs
+    Toute autre option de ricochet, telle quelle (ex. --verbose, --db f.db).
+
 .EXAMPLE
     & "$HOME\.ricochet\ricochet-on.ps1"
+
+.EXAMPLE
+    & "$HOME\.ricochet\ricochet-on.ps1" -MitmHosts '*.exemple.com' -CaptureBodies 4096
+
+.EXAMPLE
+    & "$HOME\.ricochet\ricochet-on.ps1" -Restart -Mitm --verbose
 #>
-[CmdletBinding()]
-param()
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [switch]$Restart,
+    [switch]$Mitm,
+    [string[]]$MitmHosts,
+    [int]$CaptureBodies,
+    [string[]]$Bypass,
+    [switch]$NoKeepAlive,
+    [switch]$Help,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RicochetArgs
+)
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
@@ -85,6 +122,51 @@ function Read-Log {
     } catch { '' }
 }
 
+if ($Help) {
+    Get-Help $PSCommandPath -Detailed | Out-String | Write-Host
+    $global:LASTEXITCODE = 0
+    return
+}
+
+# Options transmises à ricochet : paramètres PowerShell, puis options brutes.
+$extra = @()
+if ($Mitm) { $extra += '--mitm' }
+if ($MitmHosts) { $extra += '--mitm-hosts', ($MitmHosts -join ',') }
+if ($PSBoundParameters.ContainsKey('CaptureBodies')) { $extra += '--capture-bodies', "$CaptureBodies" }
+if ($Bypass) { $extra += '--bypass', ($Bypass -join ',') }
+if ($NoKeepAlive) { $extra += '--no-keepalive' }
+$hasCa = $false
+foreach ($a in @($RicochetArgs | Where-Object { $null -ne $_ })) {
+    $name = ($a -replace '^--?', '') -replace '=.*$', ''
+    if ($a -like '-*') {
+        if (@('listen', 'dashboard', 'rules', 'upstream') -contains $name) {
+            Write-Host "✖ $a est géré par le script : utilisez `$env:RICOCHET_PORT, `$env:RICOCHET_UI_PORT," -ForegroundColor Red
+            Write-Host '  $env:RICOCHET_RULES ou HTTPS_PROXY (amont) avant ricochet-on.' -ForegroundColor Red
+            $global:LASTEXITCODE = 2
+            return
+        }
+        if ($name -eq 'upstream-auth') {
+            Write-Host '✖ --upstream-auth apparaîtrait dans la ligne de commande du processus : utilisez' -ForegroundColor Red
+            Write-Host '  HTTPS_PROXY=http://user:pass@hôte:port ou $env:RICOCHET_UPSTREAM_AUTH.' -ForegroundColor Red
+            $global:LASTEXITCODE = 2
+            return
+        }
+        if ($name -eq 'ca-dir') { $hasCa = $true }
+    }
+    $extra += $a
+}
+$userArgs = @($extra)
+# La CA du MITM reste dans le dossier d'installation (et non dans le dossier
+# courant, défaut de ricochet).
+if (-not $hasCa) { $extra += '--ca-dir', (Join-Path $dir 'ca') }
+
+# Start-Process concatène les arguments : on protège ceux qui contiennent des
+# espaces ou sont vides.
+function ConvertTo-Arg([string]$Value) {
+    if ($Value -eq '' -or $Value -match '\s') { return '"' + $Value + '"' }
+    return $Value
+}
+
 if (-not (Test-Path $bin)) {
     Write-Host "✖ binaire ricochet introuvable : $bin" -ForegroundColor Red
     Write-Host '  installez-le avec « make install » depuis le dépôt ricochet.'
@@ -124,6 +206,21 @@ if ($httpUp -and $upstream -and ($httpUp -ne $upstream)) {
 $shownUp = Get-HostPort $upstream
 $running = Get-RunningInstance
 $proc = Get-RicochetProcess
+if ($Restart -and ($running -or $proc)) {
+    # -Restart : arrêt de l'instance en cours pour appliquer les options.
+    $stoppedPid = if ($running) { $running.pid } else { $proc.Id }
+    $previousPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $bin --dashboard "127.0.0.1:$uiPort" --stop | Out-Null } finally { $ErrorActionPreference = $previousPref }
+    if ($LASTEXITCODE -ne 0 -and $proc) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        $proc.WaitForExit(5000) | Out-Null
+    }
+    Write-Host "■ ricochet arrêté (pid $stoppedPid) pour redémarrer avec les nouvelles options" -ForegroundColor Green
+    Remove-Item $pidFile -ErrorAction SilentlyContinue
+    $running = $null
+    $proc = $null
+}
 if ($running) {
     Write-Host "● ricochet tourne déjà (pid $($running.pid))" -ForegroundColor Green
     if (-not $proc -or ("$($proc.Id)" -ne $running.pid)) {
@@ -134,7 +231,11 @@ if ($running) {
         $a = if ($runUp) { $runUp } else { 'aucun' }
         $b = if ($shownUp) { $shownUp } else { 'aucun' }
         Write-Host "! l'instance en cours utilise l'amont « $a » et non « $b » ;" -ForegroundColor Yellow
-        Write-Host '  pour changer : ricochet-off puis ricochet-on' -ForegroundColor Yellow
+        Write-Host '  pour changer : ricochet-on -Restart' -ForegroundColor Yellow
+    }
+    if ($userArgs.Count -gt 0) {
+        Write-Host "! options ignorées, ricochet tourne déjà : $($userArgs -join ' ')" -ForegroundColor Yellow
+        Write-Host "  pour les appliquer : ricochet-on -Restart ..." -ForegroundColor Yellow
     }
     $shownUp = $runUp
 } elseif ($proc) {
@@ -157,7 +258,8 @@ if ($running) {
         Write-Host "+ fichier de règles créé : $rules" -ForegroundColor DarkGray
     }
 
-    $arguments = @('--listen', "127.0.0.1:$port", '--dashboard', "127.0.0.1:$uiPort", '--rules', "`"$rules`"")
+    $arguments = @('--listen', "127.0.0.1:$port", '--dashboard', "127.0.0.1:$uiPort", '--rules', (ConvertTo-Arg $rules))
+    $arguments += @($extra | ForEach-Object { ConvertTo-Arg $_ })
     if ($env:RICOCHET_ARGS) { $arguments += $env:RICOCHET_ARGS }
     $start = @{
         FilePath               = $bin
@@ -209,6 +311,18 @@ if ($shownUp) {
 }
 $countText = if ($ruleCount) { " ($($ruleCount.Groups[1].Value) règle(s))" } else { '' }
 Write-Host "  règles    : $rules$countText"
+# État MITM de l'instance (lancée ici ou ailleurs).
+$status = Get-RunningInstance
+$mitmScope = if ($status -and $status.ContainsKey('mitm')) { $status.mitm } else { '' }
+switch ($mitmScope) {
+    '' { Write-Host '  mitm      : désactivé (ricochet-on -Restart -Mitm ou -MitmHosts ...)' -ForegroundColor DarkGray }
+    'all' { Write-Host '  mitm      : tous les hosts' -ForegroundColor Yellow }
+    default { Write-Host "  mitm      : $mitmScope" -ForegroundColor Yellow }
+}
+if ($mitmScope -and $status.ContainsKey('ca') -and $status.ca) {
+    Write-Host "  CA        : $($status.ca)"
+    Write-Host "              curl --cacert `"$($status.ca)`" ...   ou   `$env:SSL_CERT_FILE = `"$($status.ca)`"" -ForegroundColor DarkGray
+}
 Write-Host "  logs      : $log"
 Write-Host "  arrêt     : & `"$(Join-Path $dir 'ricochet-off.ps1')`"" -ForegroundColor DarkGray
 $global:LASTEXITCODE = 0

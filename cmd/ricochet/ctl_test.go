@@ -25,7 +25,10 @@ func fakeInstance(t *testing.T) (dashAddr string, proxyLn net.Listener) {
 	srv = httptest.NewServer(dashboard.New(dashboard.Options{
 		Collector: collector.New(1),
 		Version:   "test",
-		Status:    map[string]any{"proxy": proxyLn.Addr().String(), "upstream": "corp:8080"},
+		Status: map[string]any{
+			"proxy": proxyLn.Addr().String(), "upstream": "corp:8080",
+			"mitm": "*.example.com", "ca": "/tmp/ca/ca.pem",
+		},
 		Shutdown: func() {
 			time.Sleep(50 * time.Millisecond)
 			srv.CloseClientConnections()
@@ -53,7 +56,8 @@ func TestPing(t *testing.T) {
 	if code := cmdPing(addr, &out); code != ctlOK {
 		t.Fatalf("ping running instance: code %d", code)
 	}
-	for _, want := range []string{"pid=", "version=test", "proxy=" + proxyLn.Addr().String(), "upstream=corp:8080"} {
+	for _, want := range []string{"pid=", "version=test", "proxy=" + proxyLn.Addr().String(), "upstream=corp:8080",
+		"mitm=*.example.com", "ca=/tmp/ca/ca.pem"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("ping output %q lacks %q", out.String(), want)
 		}
