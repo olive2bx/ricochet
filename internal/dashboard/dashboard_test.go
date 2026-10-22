@@ -311,3 +311,58 @@ func TestExport(t *testing.T) {
 		t.Errorf("bad format: status %d", code)
 	}
 }
+
+func TestStatusAndShutdown(t *testing.T) {
+	col := collector.New(10)
+	stopped := make(chan struct{}, 1)
+	srv := httptest.NewServer(New(Options{
+		Collector: col,
+		Version:   "v9",
+		Status:    map[string]any{"proxy": "127.0.0.1:3129", "upstream": "corp:8080"},
+		Shutdown:  func() { stopped <- struct{}{} },
+	}))
+	defer srv.Close()
+
+	var st map[string]any
+	if code := getJSON(t, srv.URL+"/api/status", &st); code != 200 {
+		t.Fatalf("status: %d", code)
+	}
+	if st["app"] != "ricochet" || st["version"] != "v9" || st["proxy"] != "127.0.0.1:3129" || st["pid"] == nil {
+		t.Errorf("status = %v", st)
+	}
+
+	post := func(header, origin string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/shutdown", nil)
+		if header != "" {
+			req.Header.Set(ControlHeader, header)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post("", ""); code != http.StatusForbidden {
+		t.Errorf("without control header: %d", code)
+	}
+	if code := post("1", "http://evil.example"); code != http.StatusForbidden {
+		t.Errorf("cross-origin: %d", code)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("shutdown called by a refused request")
+	default:
+	}
+	if code := post("1", ""); code != http.StatusAccepted {
+		t.Fatalf("shutdown: %d", code)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown not called")
+	}
+}

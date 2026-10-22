@@ -107,9 +107,13 @@ alias ricochet-off='. ~/.ricochet/ricochet-off.sh'
 `ricochet-off` arrête le processus et restaure exactement les variables
 d'origine (y compris celles qui n'étaient pas définies).
 
-Une seconde activation ne relance rien et garde l'amont d'origine. Un terminal
-peut s'activer alors que ricochet tourne déjà (lancé depuis un autre
-terminal) ; l'arrêt, lui, coupe ricochet pour tous les terminaux.
+Une instance déjà lancée est détectée en interrogeant son dashboard
+(`ricochet --ping`), et non par le seul fichier pid : elle est réutilisée
+quel que soit le terminal qui l'a lancée (bash, zsh, Git Bash, PowerShell, ou
+à la main). Si son amont diffère de celui du terminal, un avertissement
+l'indique. Si le port est pris par un autre programme, le message le dit.
+L'arrêt passe par `ricochet --stop` (arrêt propre, y compris sous Windows) et
+coupe ricochet pour tous les terminaux.
 
 Variables facultatives : `RICOCHET_PORT`, `RICOCHET_UI_PORT`, `RICOCHET_RULES`
 (chemin du fichier de règles), `RICOCHET_BIN`, `RICOCHET_ARGS` (options
@@ -122,7 +126,7 @@ dans la liste des processus, ni dans les logs, ni dans le dashboard.
 
 Sous Windows, si la stratégie d'exécution bloque les scripts :
 `Set-ExecutionPolicy -Scope Process Bypass` (pour la session courante
-uniquement). L'arrêt sous Windows est immédiat (pas de signal d'arrêt propre).
+uniquement).
 
 ## Options
 
@@ -145,6 +149,8 @@ uniquement). L'arrêt sous Windows est immédiat (pas de signal d'arrêt propre)
 | `--no-keepalive` | `false` | pas de réutilisation de connexion : DNS/connexion/TLS mesurés à chaque requête |
 | `--verbose` | `false` | logs détaillés (décision de routage par requête) |
 | `--version` | | affiche la version |
+| `--ping` | | indique si un ricochet répond sur `--dashboard` (code 0, affiche `pid=…`, `upstream=…`) ou non (code 1) |
+| `--stop` | | arrête proprement le ricochet dont le dashboard est `--dashboard` (code 0) ; code 1 s'il ne tourne pas |
 
 Les credentials amont ne sont jamais affichés : ni dans les logs, ni dans le
 dashboard, ni dans les exports (le header `Proxy-Authorization` est ajouté
@@ -255,6 +261,8 @@ le détail) ; `--no-keepalive` force des connexions neuves.
 | `GET /api/requests/{id}` | un événement complet (avec corps) |
 | `GET /events` | flux SSE (`event: event` / `event: clear`) |
 | `GET /api/rules` | règles actives, date de chargement, dernière erreur |
+| `GET /api/status` | identifie l'instance : `app`, `pid`, `version`, `proxy`, `upstream` |
+| `POST /api/shutdown` | arrêt propre ; exige le header `X-Ricochet-Control: 1` (impossible depuis une page web) |
 | `GET /api/export?format=har\|json` | export de l'historique |
 | `POST /api/clear` | vide l'historique (mémoire et SQLite) |
 

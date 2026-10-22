@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,17 @@ type Options struct {
 	// AllowedHosts are extra Host header values accepted besides loopback
 	// names, e.g. the dashboard listen host when not on loopback.
 	AllowedHosts []string
+	// Status is returned by GET /api/status to identify this instance
+	// (proxy address, upstream...). "app", "pid" and "version" are added.
+	Status map[string]any
+	// Shutdown, if set, is called by POST /api/shutdown.
+	Shutdown func()
 }
+
+// ControlHeader must be present on POST /api/shutdown. Browsers cannot send
+// a custom header cross-origin without a CORS preflight, which is never
+// granted, so a web page cannot stop ricochet.
+const ControlHeader = "X-Ricochet-Control"
 
 // Server is the dashboard HTTP handler.
 type Server struct {
@@ -55,6 +66,8 @@ func New(opt Options) *Server {
 	s.mux.HandleFunc("GET /api/requests/{id}", s.handleGet)
 	s.mux.HandleFunc("GET /api/rules", s.handleRules)
 	s.mux.HandleFunc("GET /api/info", s.handleInfo)
+	s.mux.HandleFunc("GET /api/status", s.handleStatus)
+	s.mux.HandleFunc("POST /api/shutdown", s.handleShutdown)
 	s.mux.HandleFunc("POST /api/clear", s.handleClear)
 	s.mux.HandleFunc("GET /api/export", s.handleExport)
 	s.mux.HandleFunc("GET /events", s.handleEvents)
@@ -193,6 +206,32 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		info = map[string]string{}
 	}
 	writeJSON(w, info)
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	st := map[string]any{}
+	for k, v := range s.opt.Status {
+		st[k] = v
+	}
+	st["app"] = "ricochet"
+	st["pid"] = os.Getpid()
+	st["version"] = s.opt.Version
+	writeJSON(w, st)
+}
+
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if s.opt.Shutdown == nil {
+		http.Error(w, "shutdown not available", http.StatusNotImplemented)
+		return
+	}
+	if r.Header.Get(ControlHeader) != "1" {
+		http.Error(w, "missing "+ControlHeader+" header", http.StatusForbidden)
+		return
+	}
+	s.log.Info("shutdown requested through the dashboard API", "client", r.RemoteAddr)
+	w.WriteHeader(http.StatusAccepted)
+	// Reply before the server starts shutting down.
+	go s.opt.Shutdown()
 }
 
 func (s *Server) handleClear(w http.ResponseWriter, _ *http.Request) {

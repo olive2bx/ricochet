@@ -15,6 +15,9 @@ $ErrorActionPreference = 'Stop'
 $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop') -or $IsWindows
 $dir = $PSScriptRoot
 $pidFile = Join-Path $dir 'ricochet.pid'
+$exe = if ($onWindows) { 'ricochet.exe' } else { 'ricochet' }
+$bin = if ($env:RICOCHET_BIN) { $env:RICOCHET_BIN } else { Join-Path $dir $exe }
+$uiPort = if ($env:RICOCHET_UI_PORT) { $env:RICOCHET_UI_PORT } else { '3130' }
 $port = if ($env:RICOCHET_PORT) { $env:RICOCHET_PORT } else { '3129' }
 $proxyUrl = if ($env:RICOCHET_ACTIVE) { $env:RICOCHET_ACTIVE } else { "http://127.0.0.1:$port" }
 $names = if ($onWindows) { @('HTTP_PROXY', 'HTTPS_PROXY') } else { @('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY') }
@@ -27,21 +30,36 @@ function Set-Var([string]$Name, $Value) {
 }
 function Hide-Credentials([string]$Url) { $Url -replace '(://)[^/@]*@', '$1***@' }
 
-# Arrêt du processus.
-$proc = $null
-if (Test-Path $pidFile) {
-    $id = (Get-Content $pidFile -Raw).Trim()
-    if ($id) {
-        $p = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue
-        if ($p -and $p.ProcessName -like 'ricochet*') { $proc = $p }
+# Arrêt propre via le dashboard (« ricochet --stop ») : marche quel que soit le
+# terminal qui a lancé ricochet (PowerShell, Git Bash...).
+$stoppedPid = $null
+if (Test-Path $bin) {
+    $previousPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $lines = & $bin --dashboard "127.0.0.1:$uiPort" --stop } finally { $ErrorActionPreference = $previousPref }
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $lines) { if ($line -like 'pid=*') { $stoppedPid = $line.Substring(4) } }
     }
 }
-if ($proc) {
-    Stop-Process -Id $proc.Id -Force
-    $proc.WaitForExit(5000) | Out-Null
-    Write-Host "■ ricochet arrêté (pid $($proc.Id))" -ForegroundColor Green
+if ($stoppedPid) {
+    Write-Host "■ ricochet arrêté (pid $stoppedPid)" -ForegroundColor Green
 } else {
-    Write-Host "● ricochet n'était pas en cours d'exécution" -ForegroundColor DarkGray
+    # Repli : instance sans dashboard joignable, arrêtée par son pid.
+    $proc = $null
+    if (Test-Path $pidFile) {
+        $id = (Get-Content $pidFile -Raw).Trim()
+        if ($id) {
+            $p = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue
+            if ($p -and $p.ProcessName -like 'ricochet*') { $proc = $p }
+        }
+    }
+    if ($proc) {
+        Stop-Process -Id $proc.Id -Force
+        $proc.WaitForExit(5000) | Out-Null
+        Write-Host "■ ricochet arrêté (pid $($proc.Id))" -ForegroundColor Green
+    } else {
+        Write-Host "● ricochet n'était pas en cours d'exécution" -ForegroundColor DarkGray
+    }
 }
 Remove-Item $pidFile -ErrorAction SilentlyContinue
 

@@ -53,6 +53,30 @@ function Get-RicochetProcess {
     return $null
 }
 
+# Interroge le dashboard d'une instance en cours (« ricochet --ping ») :
+# fiable quel que soit le terminal (PowerShell, Git Bash...) qui l'a lancée.
+# Renvoie une table pid/upstream/... ou $null.
+function Get-RunningInstance {
+    $previousPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $lines = & $bin --dashboard "127.0.0.1:$uiPort" --ping } finally { $ErrorActionPreference = $previousPref }
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $info = @{}
+    foreach ($line in $lines) {
+        $k, $v = $line -split '=', 2
+        if ($k) { $info[$k] = $v }
+    }
+    return $info
+}
+
+# hôte:port d'une URL de proxy, sans identifiants (port 80 par défaut, comme ricochet).
+function Get-HostPort([string]$Url) {
+    if (-not $Url) { return '' }
+    $hp = $Url -replace '^[A-Za-z][A-Za-z0-9+.-]*://', '' -replace '^[^@/]*@', '' -replace '/.*$', ''
+    if ($hp -notmatch ':') { $hp += ':80' }
+    return $hp
+}
+
 # Lit le log même s'il est ouvert en écriture par ricochet.
 function Read-Log {
     try {
@@ -97,9 +121,25 @@ if ($httpUp -and $upstream -and ($httpUp -ne $upstream)) {
     Write-Host "! HTTP_PROXY et HTTPS_PROXY diffèrent : ricochet utilise $(Hide-Credentials $upstream) comme amont unique" -ForegroundColor Yellow
 }
 
+$shownUp = Get-HostPort $upstream
+$running = Get-RunningInstance
 $proc = Get-RicochetProcess
-if ($proc) {
-    Write-Host "● ricochet tourne déjà (pid $($proc.Id))" -ForegroundColor Green
+if ($running) {
+    Write-Host "● ricochet tourne déjà (pid $($running.pid))" -ForegroundColor Green
+    if (-not $proc -or ("$($proc.Id)" -ne $running.pid)) {
+        Write-Host "  lancé depuis un autre terminal : cette session l'utilise sans le relancer" -ForegroundColor DarkGray
+    }
+    $runUp = if ($running.upstream -eq 'none (direct)') { '' } else { "$($running.upstream)" }
+    if ($runUp -ne $shownUp) {
+        $a = if ($runUp) { $runUp } else { 'aucun' }
+        $b = if ($shownUp) { $shownUp } else { 'aucun' }
+        Write-Host "! l'instance en cours utilise l'amont « $a » et non « $b » ;" -ForegroundColor Yellow
+        Write-Host '  pour changer : ricochet-off puis ricochet-on' -ForegroundColor Yellow
+    }
+    $shownUp = $runUp
+} elseif ($proc) {
+    # Processus présent mais dashboard muet (démarrage en cours).
+    Write-Host "● ricochet tourne déjà (pid $($proc.Id)), dashboard pas encore joignable" -ForegroundColor Yellow
 } else {
     Remove-Item $pidFile -ErrorAction SilentlyContinue
     if (-not (Test-Path $rules)) {
@@ -138,7 +178,13 @@ if ($proc) {
     $deadline = (Get-Date).AddSeconds(5)
     while ((Read-Log) -notmatch 'msg="ricochet started"') {
         if ($proc.HasExited -or (Get-Date) -gt $deadline) {
-            Write-Host "✖ ricochet n'a pas démarré. Dernières lignes de ${log} :" -ForegroundColor Red
+            Write-Host "✖ ricochet n'a pas démarré." -ForegroundColor Red
+            # « listen tcp ...: bind: » : port pris (message système traduit selon la langue).
+            if ((Read-Log) -match 'listen tcp [^ ]+: bind:') {
+                Write-Host "  le port $port ou $uiPort est déjà utilisé par un autre programme"
+                Write-Host '  (autres ports : $env:RICOCHET_PORT / $env:RICOCHET_UI_PORT)'
+            }
+            Write-Host "  dernières lignes de ${log} :"
             (Read-Log) -split "`r?`n" | Where-Object { $_ } | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
             Remove-Item $pidFile -ErrorAction SilentlyContinue
@@ -156,8 +202,8 @@ Set-Var 'RICOCHET_ACTIVE' $proxyUrl
 $ruleCount = ([regex]::Matches((Read-Log), 'rule_count=(\d+)') | Select-Object -Last 1)
 Write-Host "  proxy     : $proxyUrl  ($($names -join ', '))"
 Write-Host "  dashboard : http://127.0.0.1:$uiPort/"
-if ($upstream) {
-    Write-Host "  amont     : $(Hide-Credentials $upstream)"
+if ($shownUp) {
+    Write-Host "  amont     : $shownUp"
 } else {
     Write-Host '  amont     : aucun (connexions directes)'
 }

@@ -21,7 +21,7 @@ fi
 
 __ricochet_off() {
 	if [ -n "${ZSH_VERSION:-}" ]; then setopt local_options sh_word_split; fi
-	local dir pidfile port proxy_url pid comm i v val restored=''
+	local dir bin pidfile port ui_port proxy_url pid comm i v val out rc restored=''
 	local c_ok='' c_warn='' c_dim='' c_off=''
 	if [ -t 1 ]; then
 		c_ok=$(printf '\033[32m') c_warn=$(printf '\033[33m')
@@ -29,34 +29,52 @@ __ricochet_off() {
 	fi
 
 	dir=$(cd "$(dirname "$1")" && pwd -P) || return 1
+	if [ -n "${RICOCHET_BIN:-}" ]; then
+		bin=$RICOCHET_BIN
+	elif [ -f "$dir/ricochet.exe" ] && [ ! -f "$dir/ricochet" ]; then
+		bin=$dir/ricochet.exe
+	else
+		bin=$dir/ricochet
+	fi
 	pidfile=$dir/ricochet.pid
 	port=${RICOCHET_PORT:-3129}
+	ui_port=${RICOCHET_UI_PORT:-3130}
 	proxy_url=${RICOCHET_ACTIVE:-http://127.0.0.1:$port}
 
-	# Arrêt du processus (SIGTERM, puis SIGKILL après 5 s).
-	pid=$(cat "$pidfile" 2>/dev/null)
-	comm=''
-	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-		comm=$(ps -p "$pid" -o comm= 2>/dev/null) || comm=ricochet
-	fi
-	case $comm in
-	*ricochet*)
-		kill "$pid" 2>/dev/null
-		i=0
-		while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
-			sleep 0.1
-			i=$((i + 1))
-		done
-		if kill -0 "$pid" 2>/dev/null; then
-			kill -9 "$pid" 2>/dev/null
-			printf '%s! ricochet ne répondait pas : arrêt forcé%s\n' "$c_warn" "$c_off"
-		fi
+	# Arrêt propre via le dashboard : marche quel que soit le terminal qui a
+	# lancé ricochet (bash, zsh, Git Bash, PowerShell).
+	out=''
+	[ -x "$bin" ] && out=$("$bin" --dashboard "127.0.0.1:$ui_port" --stop 2>/dev/null)
+	rc=$?
+	pid=$(printf '%s\n' "$out" | sed -n 's/^pid=//p')
+	if [ -n "$pid" ] && [ $rc -eq 0 ]; then
 		printf '%s■ ricochet arrêté (pid %s)%s\n' "$c_ok" "$pid" "$c_off"
-		;;
-	*)
-		printf '%s● ricochet n'"'"'était pas en cours d'"'"'exécution%s\n' "$c_dim" "$c_off"
-		;;
-	esac
+	else
+		# Repli : instance sans dashboard joignable, arrêtée par son pid.
+		pid=$(cat "$pidfile" 2>/dev/null)
+		comm=''
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+			comm=$(ps -p "$pid" -o comm= 2>/dev/null) || comm=ricochet
+		fi
+		case $comm in
+		*ricochet*)
+			kill "$pid" 2>/dev/null
+			i=0
+			while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do
+				sleep 0.1
+				i=$((i + 1))
+			done
+			if kill -0 "$pid" 2>/dev/null; then
+				kill -9 "$pid" 2>/dev/null
+				printf '%s! ricochet ne répondait pas : arrêt forcé%s\n' "$c_warn" "$c_off"
+			fi
+			printf '%s■ ricochet arrêté (pid %s)%s\n' "$c_ok" "$pid" "$c_off"
+			;;
+		*)
+			printf '%s● ricochet n'"'"'était pas en cours d'"'"'exécution%s\n' "$c_dim" "$c_off"
+			;;
+		esac
+	fi
 	rm -f "$pidfile"
 
 	# Restauration des variables proxy.
