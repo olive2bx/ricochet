@@ -131,6 +131,17 @@ st=$("$dir/ricochet" --dashboard 127.0.0.1:39130 --ping) || fail "ping après --
 case $st in *'mitm=all'*) ;; *) fail "--restart n'a pas appliqué --mitm: $st" ;; esac
 . "$dir/ricochet-off.sh" >/dev/null
 [ "$http_proxy" = 'http://alice:s3cret@127.0.0.1:9' ] || fail "restauration après --restart"
+
+# Git Bash / MSYS2 : les chemins passés au binaire sont convertis par cygpath
+# (sans dépendre de la conversion automatique, désactivable).
+mkdir "$dir/fakebin"
+printf '#!/bin/sh\necho "$2" >>"%s/cygpath.log"\necho "$2"\n' "$dir" >"$dir/fakebin/cygpath"
+chmod +x "$dir/fakebin/cygpath"
+PATH="$dir/fakebin:$PATH" . "$dir/ricochet-on.sh" >/dev/null 2>&1 || fail "activation avec cygpath"
+grep -qx "$dir/ricochet-rules.txt" "$dir/cygpath.log" || fail "règles non converties par cygpath"
+grep -qx "$dir/ca" "$dir/cygpath.log" || fail "CA non convertie par cygpath"
+type __ricochet_native >/dev/null 2>&1 && fail "fonction interne non nettoyée"
+. "$dir/ricochet-off.sh" >/dev/null
 echo "OK ($0)"
 EOF
 

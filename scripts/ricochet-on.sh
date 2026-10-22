@@ -103,7 +103,7 @@ __ricochet_on() {
 	fi
 	# La CA du MITM reste dans le dossier d'installation (et non dans le
 	# dossier courant, défaut de ricochet).
-	[ -n "$has_ca" ] || extra+=(--ca-dir "$dir/ca")
+	[ -n "$has_ca" ] || extra+=(--ca-dir "$(__ricochet_native "$dir/ca")")
 
 	if [ -n "${RICOCHET_BIN:-}" ]; then
 		bin=$RICOCHET_BIN
@@ -208,7 +208,7 @@ __ricochet_on() {
 		# shellcheck disable=SC2086 # RICOCHET_ARGS est volontairement découpé
 		(RICOCHET_UPSTREAM=$upstream nohup "$bin" \
 			--listen "127.0.0.1:$port" --dashboard "127.0.0.1:$ui_port" \
-			--rules "$rules" "${extra[@]}" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
+			--rules "$(__ricochet_native "$rules")" "${extra[@]}" ${RICOCHET_ARGS:-} >"$log" 2>&1 &
 		echo $! >"$pidfile")
 		pid=$(cat "$pidfile")
 
@@ -321,6 +321,17 @@ __ricochet_redact() {
 	printf '%s' "$1" | sed -E 's#(://)[^/@]*@#\1***@#'
 }
 
+# Chemin compris par le binaire : sous Git Bash / MSYS2 / Cygwin, ricochet.exe
+# ne connaît pas /c/Users/... et la conversion automatique de MSYS est souvent
+# désactivée (MSYS_NO_PATHCONV=1, pour docker ou kubectl).
+__ricochet_native() {
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -m "$1"
+	else
+		printf '%s\n' "$1"
+	fi
+}
+
 __ricochet_rules_template() {
 	cat <<'EOF'
 # Règles ricochet : FQDN → IP (rechargées à chaud, sans redémarrer).
@@ -337,6 +348,6 @@ EOF
 
 __ricochet_on "$__rc_src" "$@"
 __rc_status=$?
-unset -f __ricochet_on __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template __ricochet_help
+unset -f __ricochet_on __ricochet_native __ricochet_running __ricochet_redact __ricochet_hostport __ricochet_rules_template __ricochet_help
 unset __rc_src __rc_sourced
 eval "unset __rc_status; return $__rc_status"
