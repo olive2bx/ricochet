@@ -80,3 +80,41 @@ func TestRouterInvalidHostPort(t *testing.T) {
 		t.Error("Route without port succeeded")
 	}
 }
+
+func TestNoProxy(t *testing.T) {
+	up := &url.URL{Scheme: "http", Host: "upstream.local:3128"}
+	patterns := NoProxyPatterns([]string{" Corp.example ", ".lab.example", "*.wild.example", "svc.example:8443", "10.0.0.0/8", "192.168.1.5", "[::1]", ""})
+	tests := []struct {
+		host   string
+		direct bool
+	}{
+		{"corp.example", true},
+		{"a.b.corp.example", true},
+		{"notcorp.example", false},
+		{"lab.example", true},
+		{"x.lab.example", true},
+		{"wild.example", false},
+		{"x.wild.example", true},
+		{"svc.example", true},
+		{"10.20.30.40", true},
+		{"11.0.0.1", false},
+		{"192.168.1.5", true},
+		{"[::1]", true},
+		{"other.example", false},
+	}
+	rt := NewRouter(nil, up, patterns)
+	for _, tt := range tests {
+		r, err := rt.Route(tt.host + ":443")
+		if err != nil {
+			t.Fatalf("Route(%q): %v", tt.host, err)
+		}
+		if (r.Kind == RouteDirect) != tt.direct {
+			t.Errorf("%s: route %s, direct=%v wanted", tt.host, r, tt.direct)
+		}
+	}
+
+	all := NewRouter(nil, up, NoProxyPatterns([]string{"*"}))
+	if r, _ := all.Route("anything.example:443"); r.Kind != RouteDirect {
+		t.Errorf(`"*": route %s, want direct`, r)
+	}
+}

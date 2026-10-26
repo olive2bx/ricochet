@@ -117,7 +117,9 @@ out=$(. "$dir/ricochet-on.sh" --listen 1.2.3.4:1 2>&1) && fail "--listen aurait 
 case $out in *'géré par le script'*) ;; *) fail "refus --listen: $out" ;; esac
 out=$(. "$dir/ricochet-on.sh" stray-value 2>&1) && fail "valeur seule acceptée"
 case $out in *'argument inattendu'*) ;; *) fail "refus valeur seule: $out" ;; esac
-. "$dir/ricochet-on.sh" --mitm-hosts '*.example.com' --capture-bodies=512 >/dev/null 2>&1 || fail "activation avec options"
+. "$dir/ricochet-on.sh" --mitm-hosts '*.example.com' --capture-bodies=512 --no-proxy corp.example >/dev/null 2>&1 || fail "activation avec options"
+info=$(curl -fsS --noproxy '*' http://127.0.0.1:39130/api/info) || fail "dashboard injoignable (options)"
+case $info in *'"sans amont":"corp.example,*.corp.example"'*) ;; *) fail "--no-proxy non transmis: $info" ;; esac
 st=$("$dir/ricochet" --dashboard 127.0.0.1:39130 --ping) || fail "ping après activation avec options"
 case $st in *'mitm=*.example.com'*) ;; *) fail "mitm non transmis: $st" ;; esac
 case $st in *"ca=$dir/ca/ca.pem"*) ;; *) fail "CA hors du dossier d'installation: $st" ;; esac

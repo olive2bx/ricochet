@@ -29,6 +29,10 @@
 .PARAMETER Bypass
     Hosts qui ne passent pas par le proxy amont.
 
+.PARAMETER NoProxy
+    Domaines envoyés en direct au lieu du proxy amont, syntaxe NO_PROXY
+    (ex. 'corp.exemple.com', '.interne.exemple.com', '10.0.0.0/8').
+
 .PARAMETER NoKeepAlive
     Connexions neuves : timings DNS / connexion / TLS à chaque requête.
 
@@ -51,6 +55,7 @@ param(
     [string[]]$MitmHosts,
     [int]$CaptureBodies,
     [string[]]$Bypass,
+    [string[]]$NoProxy,
     [switch]$NoKeepAlive,
     [switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -134,6 +139,7 @@ if ($Mitm) { $extra += '--mitm' }
 if ($MitmHosts) { $extra += '--mitm-hosts', ($MitmHosts -join ',') }
 if ($PSBoundParameters.ContainsKey('CaptureBodies')) { $extra += '--capture-bodies', "$CaptureBodies" }
 if ($Bypass) { $extra += '--bypass', ($Bypass -join ',') }
+if ($NoProxy) { $extra += '--no-proxy', ($NoProxy -join ',') }
 if ($NoKeepAlive) { $extra += '--no-keepalive' }
 $hasCa = $false
 foreach ($a in @($RicochetArgs | Where-Object { $null -ne $_ })) {
