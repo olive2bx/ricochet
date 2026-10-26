@@ -291,7 +291,10 @@ Options transmises à ricochet (exemples) :
   --mitm                 déchiffre tout le HTTPS (CA : $1/ca/ca.pem)
   --mitm-hosts H,...     déchiffre seulement ces hosts (ex. '*.exemple.com')
   --capture-bodies N     conserve jusqu'à N octets des corps (HTTP clair et MITM)
-  --bypass H,...         hosts qui ne passent pas par l'amont
+  --no-proxy H,...       domaines en direct au lieu de l'amont, syntaxe NO_PROXY
+                         (ex. corp.exemple.com,.interne.exemple.com,10.0.0.0/8)
+  --bypass H,...         hosts qui ne passent pas par l'amont (motifs du fichier
+                         de règles : a.com, *.b.com)
   --no-keepalive         connexions neuves (timings DNS/connexion/TLS à chaque requête)
   --upstream-ca F,...    CA supplémentaires pour les serveurs déchiffrés (ex. CA
                          interne d'un cluster Kubernetes)

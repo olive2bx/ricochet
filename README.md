@@ -138,6 +138,7 @@ Get-Help "$HOME\.ricochet\ricochet-on.ps1" -Detailed
 | `--mitm` | `-Mitm` | déchiffre tout le HTTPS |
 | `--mitm-hosts H,…` | `-MitmHosts H,…` | déchiffre seulement ces hosts |
 | `--capture-bodies N` | `-CaptureBodies N` | conserve jusqu'à N octets des corps |
+| `--no-proxy H,…` | `-NoProxy H,…` | domaines envoyés en direct au lieu de l'amont (syntaxe `NO_PROXY`) |
 | `--bypass H,…` | `-Bypass H,…` | hosts qui ne passent pas par l'amont |
 | `--no-keepalive` | `-NoKeepAlive` | timings DNS/connexion/TLS à chaque requête |
 | toute autre option de ricochet | idem (ex. `--verbose`) | transmise telle quelle |
@@ -203,6 +204,7 @@ uniquement).
 | `--upstream` | *(direct)* | proxy amont `http://host:port` (ou env `RICOCHET_UPSTREAM`) |
 | `--upstream-auth` | | `user:pass` pour l'amont (ou env `RICOCHET_UPSTREAM_AUTH`) |
 | `--bypass` | | hosts qui ignorent l'amont : `a.com,*.b.com` |
+| `--no-proxy` | | idem en syntaxe `NO_PROXY` : `a.com` (et ses sous-domaines), `.b.com`, `*`, IP, CIDR `10.0.0.0/8` (ou env `RICOCHET_NO_PROXY`) |
 | `--mitm` | `false` | déchiffre toutes les connexions HTTPS |
 | `--mitm-hosts` | | déchiffre seulement ces hosts : `*.exemple.com,api.foo.com` |
 | `--ca-dir` | `./.ricochet-ca` | dossier de la CA MITM (créée au premier lancement) |
@@ -252,12 +254,26 @@ Exemple : [`testdata/rules.example.txt`](testdata/rules.example.txt).
 | Situation | Destination |
 |---|---|
 | règle trouvée | `ip:port` de la règle (port d'origine conservé sauf override), l'amont est ignoré |
-| host dans `--bypass` | connexion directe |
+| host dans `--bypass` ou `--no-proxy` | connexion directe |
 | `--upstream` défini | proxy amont (`CONNECT host:port` pour HTTPS) |
 | sinon | connexion directe |
 
 La même résolution s'applique à tous les chemins : HTTP clair, tunnel
 `CONNECT` et MITM.
+
+`--no-proxy` sert quand le proxy d'entreprise envoie vers Internet des
+domaines joignables en local : ils partent en direct, tout en restant visibles
+dans le dashboard (route `direct`). Pour l'appliquer à chaque activation,
+exportez la liste dans votre profil :
+
+```sh
+export RICOCHET_NO_PROXY='corp.exemple.com,.interne.exemple.com,10.0.0.0/8'
+```
+
+Les CIDR ne s'appliquent qu'aux IP littérales (pas de résolution DNS), et un
+port éventuel (`a.com:8443`) est ignoré : tout le host passe en direct. Les
+hosts déjà dans la variable `no_proxy` du shell ne passent pas du tout par
+ricochet : les outils s'y connectent directement.
 
 ## HTTPS : tunnel ou MITM
 

@@ -33,6 +33,7 @@ type options struct {
 	upstream     string
 	upstreamAuth string
 	bypass       string
+	noProxy      string
 	dashboard    string
 	history      int
 	noKeepAlive  bool
@@ -58,6 +59,7 @@ func main() {
 	flag.StringVar(&o.upstream, "upstream", "", "upstream HTTP proxy, e.g. http://host:3128 (or env RICOCHET_UPSTREAM; default: direct)")
 	flag.StringVar(&o.upstreamAuth, "upstream-auth", "", "upstream credentials user:pass (or env RICOCHET_UPSTREAM_AUTH)")
 	flag.StringVar(&o.bypass, "bypass", "", "comma-separated hosts that skip the upstream, e.g. a.com,*.b.com")
+	flag.StringVar(&o.noProxy, "no-proxy", "", "NO_PROXY-style list of hosts that skip the upstream: a.com (and subdomains), .b.com, 10.0.0.0/8 (or env RICOCHET_NO_PROXY)")
 	flag.StringVar(&o.dashboard, "dashboard", "127.0.0.1:8081", `dashboard listen address ("" to disable)`)
 	flag.IntVar(&o.history, "history", 5000, "number of requests kept in memory")
 	flag.BoolVar(&o.noKeepAlive, "no-keepalive", false, "disable connection reuse towards servers (per-request DNS/connect/TLS timings)")
@@ -97,6 +99,9 @@ func main() {
 	}
 	if o.upstreamAuth == "" {
 		o.upstreamAuth = os.Getenv("RICOCHET_UPSTREAM_AUTH")
+	}
+	if o.noProxy == "" {
+		o.noProxy = os.Getenv("RICOCHET_NO_PROXY")
 	}
 
 	level := slog.LevelInfo
@@ -174,6 +179,11 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		mask = []string{}
 	}
 
+	bypass := append(splitList(o.bypass), proxy.NoProxyPatterns(splitList(o.noProxy))...)
+	if upstream != nil && len(bypass) > 0 {
+		logger.Info("hosts skipping the upstream", "bypass", strings.Join(bypass, ","))
+	}
+
 	serverTLS, err := proxy.ServerTLSConfig(splitList(o.serverCA), o.insecure)
 	if err != nil {
 		return err
@@ -186,7 +196,7 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 		Rules:         store,
 		Upstream:      upstream,
 		UpstreamAuth:  auth,
-		Bypass:        splitList(o.bypass),
+		Bypass:        bypass,
 		Logger:        logger,
 		Collector:     col,
 		NoKeepAlive:   o.noKeepAlive,
@@ -279,6 +289,9 @@ func run(ctx context.Context, o options, logger *slog.Logger) error {
 			info["mitm"] = "tous les hosts"
 		case len(mitmHosts) > 0:
 			info["mitm"] = strings.Join(mitmHosts, ",")
+		}
+		if len(bypass) > 0 {
+			info["sans amont"] = strings.Join(bypass, ",")
 		}
 		switch {
 		case o.insecure:

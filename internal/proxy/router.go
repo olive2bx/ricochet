@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -90,11 +91,51 @@ func (rt *Router) Route(hostport string) (Route, error) {
 
 func (rt *Router) bypassed(host string) bool {
 	for _, p := range rt.bypass {
-		if rules.MatchPattern(p, host) {
+		if p == "*" || rules.MatchPattern(p, host) {
 			return true
+		}
+		// CIDR ("10.0.0.0/8") against an IP literal; no DNS lookup.
+		if prefix, err := netip.ParsePrefix(p); err == nil {
+			if addr, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil && prefix.Contains(addr.Unmap()) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// NoProxyPatterns converts NO_PROXY-style entries into bypass patterns:
+// "a.com" and ".a.com" match a.com and its subdomains, "*.a.com" only the
+// subdomains, "*" every host; IPs and CIDRs are kept. Ports ("a.com:8443")
+// are ignored: the whole host skips the upstream.
+func NoProxyPatterns(entries []string) []string {
+	var out []string
+	for _, e := range entries {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if _, err := netip.ParsePrefix(e); err == nil {
+			out = append(out, e)
+			continue
+		}
+		if h, _, err := net.SplitHostPort(e); err == nil {
+			e = h
+		}
+		e = strings.Trim(e, "[]")
+		switch {
+		case e == "*", strings.HasPrefix(e, "*."):
+			out = append(out, e)
+		default:
+			e = strings.TrimPrefix(e, ".")
+			if _, err := netip.ParseAddr(e); err == nil {
+				out = append(out, e)
+			} else if e != "" {
+				out = append(out, e, "*."+e)
+			}
+		}
+	}
+	return out
 }
 
 // hostPortDefault appends defPort to h when it has no port.
